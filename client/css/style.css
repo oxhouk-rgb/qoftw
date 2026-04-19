@@ -1,0 +1,404 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    overflow: hidden;
+}
+
+.screen {
+    display: none;
+    width: 100vw;
+    height: 100vh;
+}
+
+.screen.active {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Auth Screen */
+#auth-screen {
+    justify-content: center;
+    align-items: center;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+.auth-container {
+    background: rgba(255,255,255,0.1);
+    padding: 40px;
+    border-radius: 10px;
+    text-align: center;
+}
+
+.auth-forms {
+    display: flex;
+    gap: 40px;
+    margin-top: 20px;
+}
+
+.auth-forms form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.auth-forms input {
+    padding: 10px;
+    border: none;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.9);
+}
+
+.auth-forms button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background: #e94560;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.test-accounts {
+    margin-top: 20px;
+    font-size: 12px;
+    color: #aaa;
+}
+
+/* Main Menu */
+#main-menu {
+    justify-content: center;
+    align-items: center;
+    background: url('../assets/bg_menu.png') no-repeat center center;
+    background-size: cover;
+}
+
+.menu-header {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.menu-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.menu-buttons button {
+    padding: 20px 60px;
+    font-size: 24px;
+    border: 2px solid #e94560;
+    border-radius: 10px;
+    background: rgba(233, 69, 96, 0.2);
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.menu-buttons button:hover {
+    background: rgba(233, 69, 96, 0.5);
+    transform: scale(1.05);
+}
+
+/* Common Screen Elements */
+.screen-header {
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: rgba(0,0,0,0.3);
+}
+
+.back-btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background: #e94560;
+    color: white;
+    cursor: pointer;
+}
+
+/* Arsenal */
+.arsenal-content {
+    display: flex;
+    flex: 1;
+    padding: 20px;
+    gap: 20px;
+}
+
+.character-select {
+    width: 200px;
+    background: rgba(0,0,0,0.3);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+#character-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.char-item {
+    padding: 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.char-item.selected {
+    background: #e94560;
+}
+
+.character-detail {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.character-preview {
+    display: flex;
+    justify-content: center;
+}
+
+#char-preview-canvas {
+    background: rgba(0,0,0,0.3);
+    border-radius: 5px;
+}
+
+.stats-panel, .equipment-panel, .abilities-panel {
+    background: rgba(0,0,0,0.3);
+    padding: 15px;
+    border-radius: 5px;
+}
+
+#equipment-slots, #ability-slots {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.equip-slot, ability-slot {
+    width: 64px;
+    height: 64px;
+    border: 2px dashed #666;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+}
+
+.equip-slot.filled, ability-slot.filled {
+    border-style: solid;
+    border-color: #e94560;
+}
+
+.equip-slot img, ability-slot img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+/* Shop */
+.shop-tabs {
+    display: flex;
+    gap: 10px;
+    padding: 10px 20px;
+}
+
+.tab-btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.1);
+    color: white;
+    cursor: pointer;
+}
+
+.tab-btn.active {
+    background: #e94560;
+}
+
+#shop-content {
+    flex: 1;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 15px;
+    overflow-y: auto;
+}
+
+.shop-item {
+    background: rgba(0,0,0,0.3);
+    padding: 15px;
+    border-radius: 5px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.shop-item img {
+    width: 64px;
+    height: 64px;
+    margin-bottom: 10px;
+}
+
+.shop-item button {
+    margin-top: 10px;
+    padding: 5px 15px;
+    border: none;
+    border-radius: 3px;
+    background: #4CAF50;
+    color: white;
+    cursor: pointer;
+}
+
+/* Friends */
+#friends-list, #party-members {
+    padding: 20px;
+}
+
+.friend-item, .party-member {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background: rgba(0,0,0,0.3);
+    margin-bottom: 10px;
+    border-radius: 5px;
+}
+
+.friend-status {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.friend-status.online { background: #4CAF50; }
+.friend-status.offline { background: #666; }
+
+/* Lobby */
+.mode-select {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 40px;
+    align-items: center;
+}
+
+.mode-select button {
+    padding: 15px 40px;
+    font-size: 18px;
+    border: 2px solid #e94560;
+    border-radius: 5px;
+    background: transparent;
+    color: white;
+    cursor: pointer;
+}
+
+.mode-select button.selected {
+    background: #e94560;
+}
+
+#start-match-btn {
+    margin: 20px auto;
+    padding: 15px 60px;
+    font-size: 20px;
+    border: none;
+    border-radius: 5px;
+    background: #4CAF50;
+    color: white;
+    cursor: pointer;
+}
+
+#start-match-btn:disabled {
+    background: #666;
+    cursor: not-allowed;
+}
+
+/* Battle */
+#battle-screen {
+    background: #000;
+}
+
+.battle-ui {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.battle-header {
+    width: 100%;
+    padding: 10px;
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    background: rgba(0,0,0,0.5);
+}
+
+#turn-timer {
+    font-size: 32px;
+    font-weight: bold;
+    color: #e94560;
+}
+
+#battle-mode-indicator {
+    font-size: 24px;
+    color: #4CAF50;
+}
+
+#battle-canvas {
+    background: #1a1a2e;
+    border: 2px solid #333;
+}
+
+.battle-controls {
+    width: 100%;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(0,0,0,0.5);
+}
+
+#action-points {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+#action-menu {
+    display: flex;
+    gap: 10px;
+}
+
+#action-menu button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    background: #e94560;
+    color: white;
+    cursor: pointer;
+}
+
+#action-menu.hidden {
+    display: none;
+}
+
+.hidden {
+    display: none !important;
+}
