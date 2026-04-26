@@ -1,0 +1,60 @@
+<div class="arsenal-layout">
+    <!-- Left Side - Character Display -->
+    <div class="arsenal-character">
+        <div class="character-display" id="character-display" onclick="showOwnedCharacters()">
+            ❓
+        </div>
+        
+        <div class="character-stats-panel">
+            <div class="stat-row">
+                <span class="stat-label">Здоровье</span>
+                <span class="stat-value" id="char-health">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Сопротивление</span>
+                <span class="stat-value" id="char-resistance">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Сверхзащита</span>
+                <span class="stat-value" id="char-superdefense">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Атака</span>
+                <span class="stat-value" id="char-attack">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Очки хода</span>
+                <span class="stat-value" id="char-actionpoints">-</span>
+            </div>
+        </div>
+        
+        <div class="sockets-container">
+            <div class="abilities-sockets">
+                <div class="socket" id="ability-socket-1" onclick="loadAbilities(1)">⚡</div>
+                <div class="socket" id="ability-socket-2" onclick="loadAbilities(2)">⚡</div>
+                <div class="socket" id="ability-socket-3" onclick="loadAbilities(3)">⚡</div>
+            </div>
+            
+            <div class="items-sockets">
+                <div class="socket" id="item-socket-1" onclick="loadEquipment(1)">📦</div>
+                <div class="socket" id="item-socket-2" onclick="loadEquipment(2)">📦</div>
+                <div class="socket" id="item-socket-3" onclick="loadEquipment(3)">📦</div>
+                <div class="socket" id="item-socket-4" onclick="loadEquipment(4)">📦</div>
+                <div class="socket" id="item-socket-5" onclick="loadEquipment(5)">📦</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Right Side - Character Info -->
+    <div class="arsenal-info">
+        <h2 style="color: var(--secondary-color); margin-bottom: 15px;">Информация о персонаже</h2>
+        <div class="character-description-text" id="character-description">
+            Выберите персонажа для просмотра информации. Нажмите на изображение слева, чтобы выбрать персонажа из вашего списка.
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize arsenal on load - call directly since DOM is already loaded when content is inserted
+    initArsenalPage();
+</script>

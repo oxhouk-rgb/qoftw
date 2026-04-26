@@ -1,0 +1,76 @@
+<div class="chat-layout">
+    <!-- Chat Menu Panel -->
+    <div class="menu-panel">
+        <div style="flex: 1;"></div>
+        
+        <div class="friends-search" style="flex: 2; border-bottom: none; padding: 0 20px;">
+            <input type="text" id="chat-player-search" placeholder="Поиск игрока">
+            <button onclick="addToChat()">Добавить</button>
+        </div>
+        
+        <div style="flex: 1;"></div>
+        <button class="logout-btn" onclick="goBack()">Вернуться</button>
+    </div>
+
+    <!-- Content Area - Chat Messages and Input -->
+    <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
+        <!-- Chat Messages Area -->
+        <div class="chat-messages" id="chat-messages">
+            <!-- Messages will be loaded here -->
+        </div>
+
+        <!-- Chat Input Area -->
+        <div class="chat-input-area">
+            <input type="text" id="chat-message-input" placeholder="Введите сообщение..." onkeypress="handleChatKeyPress(event)">
+            <button onclick="sendMessage()">Отправить</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize chat page on load - call directly since DOM is already loaded when content is inserted
+    initChatPage();
+
+    function sendMessage() {
+        const input = document.getElementById('chat-message-input');
+        const message = input.value.trim();
+        
+        if (message) {
+            const messagesContainer = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'chat-message';
+            messageDiv.innerHTML = `
+                <div class="message-author">Вы</div>
+                <div>${escapeHtml(message)}</div>
+            `;
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            input.value = '';
+            
+            console.log('Message sent:', message);
+        }
+    }
+
+    function handleChatKeyPress(event) {
+        if (event.key === 'Enter') {
+            sendMessage();
+        }
+    }
+
+    function addToChat() {
+        const playerName = document.getElementById('chat-player-search').value;
+        if (playerName.trim()) {
+            console.log('Adding player to chat:', playerName);
+            alert('Игрок ' + playerName + ' добавлен в чат');
+            document.getElementById('chat-player-search').value = '';
+        } else {
+            alert('Введите имя игрока');
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
