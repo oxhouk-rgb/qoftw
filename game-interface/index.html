@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Browser Game Interface</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="game-container">
+        <!-- Menu Panel (1/7 height) -->
+        <div class="menu-panel" id="menuPanel">
+            <div class="menu-left">
+                <div class="user-info" id="userInfo" style="display: none;">
+                    <div class="avatar" id="userAvatar">U</div>
+                    <span id="userNickname">User</span>
+                </div>
+            </div>
+            
+            <div class="menu-center" id="menuCenter" style="display: none;">
+                <button class="btn btn-secondary" onclick="app.navigate('friends')">Друзья</button>
+                <button class="btn btn-secondary" onclick="app.navigate('chat')">Чат</button>
+                <button class="btn btn-secondary" onclick="app.navigate('shop')">Магазин</button>
+                <div class="balance-indicator">
+                    <div class="currency-icon">$</div>
+                    <span id="userBalance">0</span>
+                </div>
+            </div>
+            
+            <div class="menu-right">
+                <button class="btn btn-danger" id="logoutBtn" onclick="app.logout()" style="display: none;">Выход</button>
+                <button class="btn btn-secondary" id="backBtn" onclick="app.goBack()" style="display: none;">Вернуться</button>
+                <button class="btn btn-success" id="saveBtn" onclick="app.saveProfile()" style="display: none;">Сохранить</button>
+            </div>
+        </div>
+
+        <!-- Content Area (6/7 height) -->
+        <div class="content-area">
+            
+            <!-- Authorization Screen -->
+            <div class="screen auth-screen active" id="authScreen">
+                <div class="auth-container">
+                    <h2>Авторизация</h2>
+                    <div class="form-group">
+                        <label for="authEmail">Email</label>
+                        <input type="email" id="authEmail" placeholder="Введите email">
+                    </div>
+                    <div class="form-group">
+                        <label for="authPassword">Пароль</label>
+                        <input type="password" id="authPassword" placeholder="Введите пароль">
+                    </div>
+                    <button class="btn btn-large" onclick="app.login()">Войти</button>
+                    <span class="link-text" onclick="app.navigate('register')">Нет аккаунта? Зарегистрироваться</span>
+                </div>
+            </div>
+
+            <!-- Registration Screen -->
+            <div class="screen auth-screen" id="registerScreen">
+                <div class="auth-container">
+                    <h2>Регистрация</h2>
+                    <div class="form-group">
+                        <label for="regNickname">Никнейм</label>
+                        <input type="text" id="regNickname" placeholder="Введите никнейм">
+                    </div>
+                    <div class="form-group">
+                        <label for="regEmail">Email</label>
+                        <input type="email" id="regEmail" placeholder="Введите email">
+                    </div>
+                    <div class="form-group">
+                        <label for="regPassword">Пароль</label>
+                        <input type="password" id="regPassword" placeholder="Введите пароль">
+                    </div>
+                    <button class="btn btn-large" onclick="app.register()">Зарегистрироваться</button>
+                    <span class="link-text" onclick="app.navigate('auth')">Уже есть аккаунт? Войти</span>
+                </div>
+            </div>
+
+            <!-- Main Screen -->
+            <div class="screen main-screen" id="mainScreen">
+                <div class="left-section">
+                    <button class="game-mode-btn" onclick="app.navigate('arsenal')">
+                        <div class="game-mode-title">Арсенал</div>
+                        <div class="game-mode-desc">Управление персонажем и экипировкой</div>
+                    </button>
+                    <button class="game-mode-btn" onclick="app.navigate('profile')">
+                        <div class="game-mode-title">Профиль</div>
+                        <div class="game-mode-desc">Настройки аккаунта и статистика</div>
+                    </button>
+                </div>
+                <div class="right-section">
+                    <div class="columns-container">
+                        <div class="column">
+                            <div class="game-mode-btn" onclick="app.startGame('pvp-ffa')">
+                                <div class="game-mode-title">PVP FFA / ПвП ПРОТИВ ВСЕХ</div>
+                                <div class="game-mode-desc">Рейтинговый матч с высоким риском, но и большим вознаграждением</div>
+                            </div>
+                            <div class="game-mode-btn" onclick="app.startGame('gpvp')">
+                                <div class="game-mode-title">GPVP / ПвП 2х2</div>
+                                <div class="game-mode-desc">Матч без рейтинга, награды делятся 50/50 случайно между участниками победившей стороны</div>
+                            </div>
+                        </div>
+                        <div class="column">
+                            <div class="game-mode-btn" onclick="app.startGame('friends')">
+                                <div class="game-mode-title">ИГРА С ДРУЗЬЯМИ</div>
+                                <div class="game-mode-desc">FFA Тренировочный матч с друзьями без рейтинга и наград</div>
+                            </div>
+                            <div class="game-mode-btn" onclick="app.startGame('pve')">
+                                <div class="game-mode-title">PVE / ПВЕ ПРОХОЖДЕНИЕ</div>
+                                <div class="game-mode-desc">Игра против ИИ где требуется пройти лабораторию повышенной сложности в одиночку или с другом</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Profile Settings Screen -->
+            <div class="screen" id="profileScreen">
+                <div class="profile-grid">
+                    <div class="profile-card">
+                        <h3>Настройки профиля</h3>
+                        <div class="form-group">
+                            <label for="profileAvatar">Аватар</label>
+                            <input type="text" id="profileAvatar" placeholder="URL аватара или буква">
+                        </div>
+                        <div class="form-group">
+                            <label for="profileNickname">Никнейм</label>
+                            <input type="text" id="profileNickname" placeholder="Новый никнейм">
+                        </div>
+                        <div class="form-group">
+                            <label for="profileEmail">Электронная почта</label>
+                            <input type="email" id="profileEmail" placeholder="Новый email">
+                        </div>
+                        <div class="form-group">
+                            <label for="profilePassword">Пароль</label>
+                            <input type="password" id="profilePassword" placeholder="Новый пароль">
+                        </div>
+                        <div class="form-group">
+                            <label for="currentPassword">Текущий пароль</label>
+                            <input type="password" id="currentPassword" placeholder="Введите текущий пароль">
+                        </div>
+                    </div>
+                    <div class="profile-card">
+                        <h3>Статистика</h3>
+                        <div class="stat-row">
+                            <span>Побед:</span>
+                            <span id="statsWins">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Поражений:</span>
+                            <span id="statsLosses">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Ранг игрока:</span>
+                            <span id="playerRank">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span>Премиум подписка:</span>
+                            <span id="premiumStatus">Нет</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Shop Screen -->
+            <div class="screen" id="shopScreen">
+                <div class="shop-tabs" id="shopTabs">
+                    <button class="btn btn-secondary" onclick="app.showShopSection('characters')">Персонажи</button>
+                    <button class="btn btn-secondary" onclick="app.showShopSection('items')">Предметы</button>
+                    <button class="btn btn-secondary" onclick="app.showShopSection('currency')">Валюта</button>
+                </div>
+                <div class="factions-grid" id="factionsGrid">
+                    <div class="faction-card" onclick="app.showFactionCharacters(1)">
+                        <div class="faction-name">Фракция 1</div>
+                        <div class="faction-desc">Описание первой фракции</div>
+                    </div>
+                    <div class="faction-card" onclick="app.showFactionCharacters(2)">
+                        <div class="faction-name">Фракция 2</div>
+                        <div class="faction-desc">Описание второй фракции</div>
+                    </div>
+                    <div class="faction-card" onclick="app.showFactionCharacters(3)">
+                        <div class="faction-name">Фракция 3</div>
+                        <div class="faction-desc">Описание третьей фракции</div>
+                    </div>
+                    <div class="faction-card" onclick="app.showFactionCharacters(4)">
+                        <div class="faction-name">Фракция 4</div>
+                        <div class="faction-desc">Описание четвертой фракции</div>
+                    </div>
+                </div>
+                <div class="scrollable-list" id="shopList" style="display: none;"></div>
+            </div>
+
+            <!-- Arsenal Screen -->
+            <div class="screen" id="arsenalScreen">
+                <div class="arsenal-layout">
+                    <div class="arsenal-left">
+                        <div class="character-display" id="characterDisplay" onclick="app.openOwnedCharacters()">
+                            <div style="text-align: center; opacity: 0.5;">
+                                <div style="font-size: 48px;">👤</div>
+                                <div>Нажмите для выбора персонажа</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="arsenal-right">
+                        <div class="stats-list">
+                            <h3>Характеристики</h3>
+                            <div class="stat-item">
+                                <span>Здоровье:</span>
+                                <span id="charHealth">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span>Сопротивление:</span>
+                                <span id="charResistance">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span>Сверхзащита:</span>
+                                <span id="charSuperDefense">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span>Атака:</span>
+                                <span id="charAttack">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span>Очки хода:</span>
+                                <span id="charActionPoints">-</span>
+                            </div>
+                        </div>
+                        <div class="sockets-container">
+                            <h3>Способности</h3>
+                            <div class="abilities-sockets" id="abilitySockets">
+                                <div class="socket" onclick="app.openAbilitySelector(0)"><span class="socket-icon">⚡</span></div>
+                                <div class="socket" onclick="app.openAbilitySelector(1)"><span class="socket-icon">⚡</span></div>
+                                <div class="socket" onclick="app.openAbilitySelector(2)"><span class="socket-icon">⚡</span></div>
+                            </div>
+                            <h3>Предметы</h3>
+                            <div class="items-sockets" id="itemSockets">
+                                <div class="socket" onclick="app.openItemSelector(0)"><span class="socket-icon">🎒</span></div>
+                                <div class="socket" onclick="app.openItemSelector(1)"><span class="socket-icon">🎒</span></div>
+                                <div class="socket" onclick="app.openItemSelector(2)"><span class="socket-icon">🎒</span></div>
+                                <div class="socket" onclick="app.openItemSelector(3)"><span class="socket-icon">🎒</span></div>
+                                <div class="socket" onclick="app.openItemSelector(4)"><span class="socket-icon">🎒</span></div>
+                            </div>
+                        </div>
+                        <div class="profile-card" style="flex: 1;">
+                            <h3>Описание персонажа</h3>
+                            <p id="characterDescription" style="opacity: 0.8; line-height: 1.6;">Выберите персонажа для просмотра описания</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Friends Screen -->
+            <div class="screen" id="friendsScreen">
+                <div class="friends-layout">
+                    <div class="friends-list">
+                        <h3>Список друзей</h3>
+                        <input type="text" class="search-input" id="friendSearch" placeholder="Поиск по нику" oninput="app.searchFriends()">
+                        <div id="friendsListContent"></div>
+                    </div>
+                    <div class="requests-list">
+                        <h3>Запросы в друзья</h3>
+                        <div id="friendRequestsContent"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Screen -->
+            <div class="screen" id="chatScreen">
+                <div class="chat-layout">
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-message">
+                            <div class="message-author">Система</div>
+                            <div class="message-text">Добро пожаловать в региональный чат!</div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <input type="text" class="chat-input" id="chatInput" placeholder="Введите сообщение...">
+                        <button class="btn" onclick="app.sendMessage()">Отправить</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Modal for selectors -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Выбор</h3>
+                <button class="btn modal-close" onclick="app.closeModal()">Закрыть</button>
+            </div>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
