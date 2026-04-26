@@ -1,0 +1,70 @@
+<div class="profile-layout">
+    <!-- Profile Menu Panel -->
+    <div class="menu-panel">
+        <button class="logout-btn" onclick="saveProfile()">Сохранить</button>
+        <div style="flex: 1;"></div>
+        <button class="logout-btn" onclick="goBack()">Вернуться</button>
+    </div>
+
+    <div class="profile-settings">
+    <div class="settings-section">
+        <h3>Настройки профиля</h3>
+        <div class="form-group">
+            <label for="profile-nickname">Никнейм</label>
+            <input type="text" id="profile-nickname" placeholder="Введите никнейм">
+        </div>
+        <div class="form-group">
+            <label for="profile-email">Электронная почта</label>
+            <input type="email" id="profile-email" placeholder="Введите email">
+        </div>
+        <div class="form-group">
+            <label for="profile-current-password">Текущий пароль</label>
+            <input type="password" id="profile-current-password" placeholder="Введите текущий пароль">
+        </div>
+        <div class="form-group">
+            <label for="profile-new-password">Новый пароль</label>
+            <input type="password" id="profile-new-password" placeholder="Введите новый пароль">
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Статистика матчей</h3>
+        <div class="profile-stats">
+            <div class="stat-box">
+                <div class="value" id="stats-wins">25</div>
+                <div class="label">Побед</div>
+            </div>
+            <div class="stat-box">
+                <div class="value" id="stats-losses">10</div>
+                <div class="label">Поражений</div>
+            </div>
+            <div class="stat-box">
+                <div class="value" id="stats-rank">500</div>
+                <div class="label">Ранг (0-1000)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Премиум подписка</h3>
+        <div class="profile-stats">
+            <div class="stat-box">
+                <div class="value" id="premium-status">Нет</div>
+                <div class="label">Активность</div>
+            </div>
+        </div>
+    </div>
+    </div>
+</div>
+
+<script>
+    // Initialize profile data when loaded - call directly since DOM is already loaded when content is inserted
+    const userData = GameState.userData;
+    
+    document.getElementById('profile-nickname').value = userData.nickname;
+    document.getElementById('profile-email').value = userData.email;
+    document.getElementById('stats-wins').textContent = userData.wins;
+    document.getElementById('stats-losses').textContent = userData.losses;
+    document.getElementById('stats-rank').textContent = userData.rank;
+    document.getElementById('premium-status').textContent = userData.premium ? 'Да' : 'Нет';
+</script>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Browser Game</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Auth Container -->
+    <div id="auth-container">
+        <!-- Login Form -->
+        <div class="auth-box" id="login-form">
+            <h2>Авторизация</h2>
+            <form onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" required placeholder="Введите ваш email">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Пароль</label>
+                    <input type="password" id="login-password" required placeholder="Введите ваш пароль">
+                </div>
+                <button type="submit" class="btn btn-primary">Войти</button>
+            </form>
+            <div class="auth-switch">
+                Нет аккаунта? <a onclick="showRegister()">Зарегистрироваться</a>
+            </div>
+        </div>
+
+        <!-- Register Form -->
+        <div class="auth-box hidden" id="register-form">
+            <h2>Регистрация</h2>
+            <form onsubmit="handleRegister(event)">
+                <div class="form-group">
+                    <label for="register-nickname">Никнейм</label>
+                    <input type="text" id="register-nickname" required placeholder="Придумайте никнейм">
+                </div>
+                <div class="form-group">
+                    <label for="register-email">Email</label>
+                    <input type="email" id="register-email" required placeholder="Введите ваш email">
+                </div>
+                <div class="form-group">
+                    <label for="register-password">Пароль</label>
+                    <input type="password" id="register-password" required placeholder="Придумайте пароль">
+                </div>
+                <button type="submit" class="btn btn-primary">Зарегистрироваться</button>
+            </form>
+            <div class="auth-switch">
+                Уже есть аккаунт? <a onclick="showLogin()">Войти</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Container -->
+    <div id="game-container">
+        <div class="game-field">
+            <!-- Menu Panel (1/7 height) -->
+            <div class="menu-panel">
+                <div class="user-info">
+                    <div class="user-avatar" id="user-avatar">👤</div>
+                    <span class="user-nickname" id="user-nickname">Player1</span>
+                </div>
+
+                <div class="menu-buttons">
+                    <button class="menu-btn" data-page="friends" onclick="navigateTo('friends')">Друзья</button>
+                    <button class="menu-btn" data-page="chat" onclick="navigateTo('chat')">Чат</button>
+                    <button class="menu-btn" data-page="shop" onclick="navigateTo('shop')">Магазин</button>
+                </div>
+
+                <div class="balance-indicator">
+                    <span class="currency-icon">💰</span>
+                    <span class="balance-amount" id="balance-amount">500,000</span>
+                </div>
+
+                <button class="logout-btn" onclick="logout()">Выход</button>
+            </div>
+
+            <!-- Content Area (6/7 height) -->
+            <div class="content-area">
+                <!-- Main Screen -->
+                <div id="main" class="content-section active">
+                    <div class="main-layout">
+                        <div class="left-section">
+                            <button class="action-btn" onclick="navigateTo('arsenal')">Арсенал</button>
+                            <button class="action-btn" onclick="navigateTo('profile')">Профиль</button>
+                        </div>
+                        <div class="right-section">
+                            <div class="game-modes">
+                                <div class="mode-card" data-mode="pvp-ffa">
+                                    <div class="mode-title">PVP FFA / ПвП ПРОТИВ ВСЕХ</div>
+                                    <div class="mode-description">Рейтинговый матч с высоким риском, но и большим вознаграждением</div>
+                                </div>
+                                <div class="mode-card" data-mode="gpvp">
+                                    <div class="mode-title">GPVP / ПвП 2х2</div>
+                                    <div class="mode-description">Матч без рейтинга, награды делятся 50/50 случайно между участниками победившей стороны</div>
+                                </div>
+                            </div>
+                            <div class="game-modes">
+                                <div class="mode-card" data-mode="friends">
+                                    <div class="mode-title">ИГРА С ДРУЗЬЯМИ</div>
+                                    <div class="mode-description">FFA Тренировочный матч с друзьями без рейтинга и наград</div>
+                                </div>
+                                <div class="mode-card" data-mode="pve">
+                                    <div class="mode-title">PVE / ПВЕ ПРОХОЖДЕНИЕ</div>
+                                    <div class="mode-description">Игра против ИИ где требуется пройти лабораторию повышенной сложности в одиночку или с другом</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profile Section -->
+                <div id="profile" class="content-section">
+                    <div class="content-wrapper"></div>
+                </div>
+
+                <!-- Shop Section -->
+                <div id="shop" class="content-section">
+                    <div class="content-wrapper"></div>
+                </div>
+
+                <!-- Arsenal Section -->
+                <div id="arsenal" class="content-section">
+                    <div class="content-wrapper"></div>
+                </div>
+
+                <!-- Friends Section -->
+                <div id="friends" class="content-section">
+                    <div class="content-wrapper"></div>
+                </div>
+
+                <!-- Chat Section -->
+                <div id="chat" class="content-section">
+                    <div class="content-wrapper"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Overlay -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal-content" id="modal-content"></div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

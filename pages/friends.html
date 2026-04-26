@@ -1,0 +1,49 @@
+<div class="friends-layout">
+    <!-- Friends Menu Panel -->
+    <div class="menu-panel">
+        <div style="flex: 1;"></div>
+        
+        <div class="friends-search" style="flex: 2; border-bottom: none; padding: 0 20px;">
+            <input type="text" id="friend-search-input" placeholder="Поиск игрока по нику" oninput="searchFriends()">
+            <button onclick="addFriend()">Добавить</button>
+        </div>
+        
+        <div style="flex: 1;"></div>
+        <button class="logout-btn" onclick="goBack()">Вернуться</button>
+    </div>
+
+    <!-- Content Area - Split vertically -->
+    <div style="display: flex; width: 100%; height: 100%;">
+        <!-- Left Side - Friends List -->
+        <div class="friends-list-panel">
+            <div class="panel-header">Список друзей</div>
+            <div class="scroll-container" id="friends-list" style="flex: 1;">
+                <!-- Friends will be loaded here -->
+            </div>
+        </div>
+
+        <!-- Right Side - Friend Requests -->
+        <div class="requests-panel">
+            <div class="panel-header">Запросы в друзья</div>
+            <div class="scroll-container" id="friend-requests" style="flex: 1;">
+                <!-- Requests will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize friends page on load - call directly since DOM is already loaded when content is inserted
+    initFriendsPage();
+
+    function addFriend() {
+        const playerName = document.getElementById('friend-search-input').value;
+        if (playerName.trim()) {
+            console.log('Adding friend:', playerName);
+            alert('Запрос на дружбу отправлен игроку: ' + playerName);
+            document.getElementById('friend-search-input').value = '';
+        } else {
+            alert('Введите имя игрока для добавления в друзья');
+        }
+    }
+</script>
