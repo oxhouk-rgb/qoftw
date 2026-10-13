@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battle System - Test</title>
+    <link rel="stylesheet" href="css/game.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Экран выбора игрока -->
+        <div id="login-screen">
+            <h1>⚔️ BATTLE SYSTEM TEST ⚔️</h1>
+            <p>Выберите игрока для входа:</p>
+            <div id="player-select">
+                <button class="player-btn" data-player="PLAYER1" style="border-color: #ff4444;">
+                    PLAYER1<br><small>NAPALM UNIT</small>
+                </button>
+                <button class="player-btn" data-player="PLAYER2" style="border-color: #4444ff;">
+                    PLAYER2<br><small>FROST KNIGHT</small>
+                </button>
+                <button class="player-btn" data-player="PLAYER3" style="border-color: #44ff44;">
+                    PLAYER3<br><small>SHADOW ROGUE</small>
+                </button>
+                <button class="player-btn" data-player="PLAYER4" style="border-color: #ffaa00;">
+                    PLAYER4<br><small>IRON GUARD</small>
+                </button>
+            </div>
+            <div id="init-status"></div>
+        </div>
+
+        <!-- Игровой экран -->
+        <div id="game-screen" style="display:none;">
+            <!-- Верхняя панель -->
+            <div id="top-bar">
+                <div id="player-info">
+                    <span id="current-player-name"></span>
+                    <span id="current-player-hp"></span>
+                    <span id="current-player-shield"></span>
+                    <span id="current-player-actions"></span>
+                </div>
+                <div id="turn-timer">
+                    <span>Ход через: <span id="timer-value">10</span>с</span>
+                </div>
+                <div id="negatives-display"></div>
+            </div>
+
+            <!-- Игровое поле -->
+            <div id="game-field">
+                <div id="grid-container">
+                    <!-- Сетка будет сгенерирована JS -->
+                </div>
+            </div>
+
+            <!-- Диалог действий при клике -->
+            <div id="action-dialog" style="display:none;">
+                <div id="dialog-title">Координаты: <span id="dialog-coords"></span></div>
+                <div id="dialog-actions">
+                    <button id="btn-move" class="action-btn move-btn">🚶 Двигаться</button>
+                    <button id="btn-attack" class="action-btn attack-btn">⚔️ Атака</button>
+                    <button id="btn-ability1" class="action-btn ability-btn">🔥 Способность 1</button>
+                    <button id="btn-ability2" class="action-btn ability-btn">❄️ Способность 2</button>
+                    <button id="btn-ability3" class="action-btn ability-btn">💀 Способность 3</button>
+                </div>
+                <button id="btn-close-dialog" class="close-btn">✕ Закрыть</button>
+            </div>
+
+            <!-- Лог событий -->
+            <div id="log-panel">
+                <h3>Лог боя</h3>
+                <div id="log-content"></div>
+            </div>
+
+            <!-- Панель способностей -->
+            <div id="abilities-panel">
+                <h3>Способности</h3>
+                <div id="abilities-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/game.js"></script>
+</body>
+</html>
