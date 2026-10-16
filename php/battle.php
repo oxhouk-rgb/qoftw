@@ -84,17 +84,25 @@ function processMove(&$state, $player_id, $target_x, $target_y) {
         return ['success' => false, 'message' => 'Конечная клетка занята'];
     }
     
-    // Проверяем ловушки и зоны угрозы на всём пути
+    // Проверяем ловушки и зоны угрозы на всём пути.
+    // ВАЖНО: путь здесь только ПРЕДСКАЗЫВАЕТся (проверка ловушек выполняется
+    // «на черновом» копийстве состояния — см. makeTrapPreviewState()).
+    // Реальный урон/эффекты применяются в updateMovements(), когда игрок
+    // физически доходит до клетки на серверных часах. Так исключается
+    // рассинхрон: клиент не получает stun/death раньше, чем анимация
+    // движения довела спрайт до клетки мины.
     $path = calculatePath($cur_pos['x'], $cur_pos['y'], $target_x, $target_y);
     $trap_found = false;
     $trap_distance = 0;
     $stopped_by_npc = false;
-    
+
+    $preview_state = makeTrapPreviewState($state);
+
     foreach ($path as $index => $cell) {
-        // Проверяем ловушки
-        $trap_result = processTraps($state, $player_id, $cell['x'], $cell['y']);
+        // Проверяем ловушки (на черновом копийстве — реальное состояние не меняется)
+        $trap_result = processTraps($preview_state, $player_id, $cell['x'], $cell['y']);
         if ($trap_result['triggered']) {
-            // Нашли ловушку - останавливаемся на этой клетке
+            // Нашли ловушку - предсказываем остановку на этой клетке
             $trap_found = true;
             $trap_distance = $index + 1; // +1 потому что индекс с 0
             $state = addLog($state, $player_id . ' наступил на ловушку ' . $trap_result['trap'] . ' на клетке (' . $cell['x'] . ',' . $cell['y'] . ')');
@@ -106,22 +114,28 @@ function processMove(&$state, $player_id, $target_x, $target_y) {
             break;
         }
         
-        // Проверяем зоны угрозы NPC
-        $npc_results = checkThreatZoneIntersection($state, $player_id, $cell['x'], $cell['y']);
-        
-        // Если игрок получил урон от NPC и умер - останавливаемся
-        if ($state['players'][$player_id]['STATUS'] === 'DEATH') {
+        // Предсказание зон угрозы NPC: если бы игрок дошёл до этой клетки и
+        // получил смертельный урон — движение заканчивается здесь.
+        // (Реальный урон также применяется позже, в updateMovements().)
+        $death_preview = $preview_state;
+        $death_preview['players'][$player_id]['CUR_POSITION_XY'] = formatXY($cell['x'], $cell['y']);
+        checkThreatZoneIntersection($death_preview, $player_id, $cell['x'], $cell['y']);
+        if ($death_preview['players'][$player_id]['STATUS'] === 'DEATH') {
             $stopped_by_npc = true;
             $trap_distance = $index + 1;
             $target_x = $cell['x'];
             $target_y = $cell['y'];
             $distance = $trap_distance;
+            $state = addLog($state, $player_id . ' будет остановлен NPC на клетке (' . $cell['x'] . ',' . $cell['y'] . ')');
             break;
         }
     }
     
     // Успешное перемещение - ПЛАВНОЕ
     $state['players'][$player_id]['END_POSITION_XY'] = formatXY($target_x, $target_y);
+    // STATUS='MOVING' ставим ВСЕГДА (даже если ловушкаPredicted оглушит/убьёт
+    // игрока по пути): анимация движения должна довести спрайт до клетки мины,
+    // а DEATH/STUNNED применятся в updateMovements() в момент фактического входа.
     $state['players'][$player_id]['STATUS'] = 'MOVING';
     $state['players'][$player_id]['ACTIONS']--;
     
@@ -379,7 +393,12 @@ function updateMovements(&$state) {
             // Перемещение завершено
             $player['CUR_POSITION_XY'] = $player['END_POSITION_XY'];
             $player['START_POSITION_XY'] = $player['END_POSITION_XY'];
-            $player['STATUS'] = 'IDLE';
+            // ВАЖНО: STATUS='IDLE' ставим ТОЛЬКО если игрок не оглушен/не убит
+            // в пути (ловушка сработала на промежуточной клетке). Иначе статус
+            // STUNNED/DEATH сбросился бы раньше окончания эффекта/анимации.
+            if ($player['STATUS'] !== 'STUNNED' && $player['STATUS'] !== 'DEATH') {
+                $player['STATUS'] = 'IDLE';
+            }
             unset($player['MOVE_END_TIME']);
             unset($player['MOVE_START_TIME']);
             unset($player['MOVE_DISTANCE']);
@@ -390,7 +409,20 @@ function updateMovements(&$state) {
             
             // Проверяем зоны угрозы NPC на новой позиции
             checkThreatZoneIntersection($state, $pid, $new_pos['x'], $new_pos['y']);
-            
+
+            // Если игрок был оглушен ещё в пути (ловушка сработала на
+            // промежуточной клетке), восстанавливаем статус STUNNED — иначе
+            // финал движения сбросил бы его в IDLE раньше времени.
+            // DEATH/DECAY от ловушки/NPC имеют приоритет.
+            if ($player['STATUS'] !== 'DEATH' && $player['STATUS'] !== 'DECAY') {
+                foreach ($player['NEGATIVES'] as $neg) {
+                    if (strpos($neg, 'STUNNED[') === 0) {
+                        $player['STATUS'] = 'STUNNED';
+                        break;
+                    }
+                }
+            }
+
             // Проверяем выход из комнаты
             $room_key = formatXY($new_pos['x'], $new_pos['y']);
             if (isset($state['room']['exits'][$room_key])) {
@@ -417,19 +449,85 @@ function updateMovements(&$state) {
                 // Обновляем позицию
                 $player['CUR_POSITION_XY'] = formatXY($new_x, $new_y);
                 
-                // Проверяем ловушки и зоны угрозы если клетка изменилась
+                // Проверяем ловушки и зоны угрозы если клетка изменилась.
+                // Реальный урон/эффекты применяются именно здесь — в момент,
+                // когда серверные часы довели игрока до клетки (анимация на
+                // клиенте синхронизирована по тем же MOVE_START/END_TIME).
                 if ($old_pos['x'] !== $new_x || $old_pos['y'] !== $new_y) {
                     $trap_result = processTraps($state, $pid, $new_x, $new_y);
                     if ($trap_result['triggered']) {
                         $state = addLog($state, $pid . ' активировал ловушку ' . $trap_result['trap'] . ' во время движения');
+                        
+                        // Игрок ОСТАНАВЛИВАЕТСЯ ровно на клетке с миной:
+                        // финал движения выполняется сразу, без ожидания
+                        // оставшейся части пути.
+                        $player['CUR_POSITION_XY'] = formatXY($new_x, $new_y);
+                        $player['START_POSITION_XY'] = formatXY($new_x, $new_y);
+                        $player['END_POSITION_XY'] = formatXY($new_x, $new_y);
+                        unset($player['MOVE_END_TIME']);
+                        unset($player['MOVE_START_TIME']);
+                        unset($player['MOVE_DISTANCE']);
+                        // Финальный TURN: направление фактического входа на клетку
+                        if ($new_x > $old_pos['x']) $player['TURN'] = 'RIGHT';
+                        elseif ($new_x < $old_pos['x']) $player['TURN'] = 'LEFT';
+                        
+                        // DEATH из ловушки (если HP обнулились) уже выставлен
+                        // внутри processTraps — он имеет приоритет. Иначе:
+                        // оглушение от ловушки активируем СРАЗУ, не дожидаясь
+                        // начала следующего хода (иначе STUNNED «висел» бы
+                        // неактивным до processTurnStart).
+                        if ($player['STATUS'] !== 'DEATH') {
+                            foreach ($player['NEGATIVES'] as $neg) {
+                                if (strpos($neg, 'STUNNED[') === 0) {
+                                    $player['STATUS'] = 'STUNNED';
+                                    $player['ACTIONS'] = 0;
+                                    break;
+                                }
+                            }
+                        }
+                        continue;
                     }
                     
                     // Проверяем зоны угрозы NPC
                     checkThreatZoneIntersection($state, $pid, $new_x, $new_y);
+                    
+                    // Смертельный урон от NPC прерывает движение на этой клетке
+                    if ($player['STATUS'] === 'DEATH') {
+                        $player['CUR_POSITION_XY'] = formatXY($new_x, $new_y);
+                        $player['START_POSITION_XY'] = formatXY($new_x, $new_y);
+                        $player['END_POSITION_XY'] = formatXY($new_x, $new_y);
+                        unset($player['MOVE_END_TIME']);
+                        unset($player['MOVE_START_TIME']);
+                        unset($player['MOVE_DISTANCE']);
+                        if ($new_x > $old_pos['x']) $player['TURN'] = 'RIGHT';
+                        elseif ($new_x < $old_pos['x']) $player['TURN'] = 'LEFT';
+                        $state = addLog($state, $pid . ' убит NPC на клетке (' . $new_x . ',' . $new_y . ')');
+                        continue;
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * Черновое копийство состояния для предсказания ловушек/NPC в processMove().
+ * Глубоко копируем только то, что мутируют processTraps/checkThreatZoneIntersection:
+ * список ловушек и поле NEGATIVES игроков (урон/статусы пишутся в players,
+ * но для предсказания достаточно отследить факт срабатывания и DEATH-цепочку
+ * внутри копии — реальные игроки не затрагиваются).
+ */
+function makeTrapPreviewState($state) {
+    $preview = $state;
+    $preview['traps'] = unserialize(serialize($state['traps']));
+    $preview['players'] = [];
+    foreach ($state['players'] as $pid => $p) {
+        $pc = $p;
+        $pc['NEGATIVES'] = $p['NEGATIVES'];
+        $preview['players'][$pid] = $pc;
+    }
+    $preview['npcs'] = unserialize(serialize($state['npcs']));
+    return $preview;
 }
 
 /**
@@ -545,7 +643,11 @@ function resetAttackStatus(&$state) {
             if (!isset($player['ATTACK_TIME'])) {
                 $player['ATTACK_TIME'] = time();
             } elseif (time() - $player['ATTACK_TIME'] >= 1) {
-                $player['STATUS'] = 'IDLE';
+                // Не сбрасываем статус, если игрок успел быть оглушён
+                // (ловушка/способность) во время анимации атаки.
+                if ($player['STATUS'] !== 'STUNNED') {
+                    $player['STATUS'] = 'IDLE';
+                }
                 unset($player['ATTACK_TIME']);
             }
         }

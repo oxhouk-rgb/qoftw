@@ -142,9 +142,17 @@ function processNegatives(&$state, $player_id) {
                 break;
                 
             case 'STUNNED':
-                // Оглушенный не может действовать
+                // Оглушенный не может действовать.
+                // ВАЖНО: STATUS='STUNNED' ставится НЕ только здесь (на старте
+                // хода), но и немедленно при наложении эффекта (см.
+                // applyNegativeEffect в abilities.php) — иначе игрок, оглушенный
+                // ловушкой во время движения, оставался бы без статуса до
+                // следующего хода. MOVING не прерываем: движение само по себе
+                // блокирует действия, а спрайт должен доехать до клетки мины.
                 $player['ACTIONS'] = 0;
-                $player['STATUS'] = 'STUNNED';
+                if ($player['STATUS'] !== 'MOVING') {
+                    $player['STATUS'] = 'STUNNED';
+                }
                 break;
                 
             case 'SLOWED':

@@ -867,7 +867,19 @@ function renderGrid(data) {
             
             // Ищем существующий элемент игрока
             let entity = document.querySelector(`[data-player-id="${pid}"]`);
-            
+
+            // Если сервер снял статус MOVING (например, игрок мгновенно
+            // остановлен ловушкой на клетке мины), досрочно завершаем
+            // локальную анимацию движения — иначе «призрачный» rAF будет
+            // тащить спрайт к прежней конечной точке поверх серверной позиции.
+            if (entity && player.STATUS !== 'MOVING') {
+                state.animations.forEach((anim, key) => {
+                    if (key.startsWith(`${pid}_`)) {
+                        state.animations.delete(key);
+                    }
+                });
+            }
+
             if (!entity) {
                 // Создаём новый элемент
                 entity = createPlayerEntity(player, pid);
@@ -886,7 +898,7 @@ function renderGrid(data) {
             }
             
             // Обрабатываем перемещение
-            if (player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME) {
+            if (player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
                 // Игрок двигается - запускаем клиентскую анимацию
                 const startPos = parseXY(player.START_POSITION_XY);
                 const endPos = parseXY(player.END_POSITION_XY);
@@ -919,11 +931,13 @@ function renderGrid(data) {
                     key.startsWith(`${pid}_`)
                 );
                 
-                if (!hasAnimation && cell && entity.parentElement !== cell) {
+                if (!hasAnimation) {
                     // Перемещаем без анимации на серверную позицию
-                    entity.style.transition = 'none';
                     entity.style.transform = '';
-                    cell.appendChild(entity);
+                    if (cell && entity.parentElement !== cell) {
+                        entity.style.transition = 'none';
+                        cell.appendChild(entity);
+                    }
                 }
             }
         });
