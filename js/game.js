@@ -581,6 +581,18 @@ document.getElementById('btn-close-dialog').addEventListener('click', closeDialo
 // === РЕНДЕРИНГ ===
 
 /**
+ * Применить отражение спрайта по направлению TURN.
+ * Механика: div персонажа зеркалится по горизонтали (scaleX(-1)) когда TURN === 'LEFT'.
+ * Значения 'RIGHT'/'UP'/'DOWN' (и любые другие) — без отражения.
+ * Класс turn-left живёт на элементе постоянно и переключается только здесь;
+ * анимация движения (inline transform в animateMove) обязана сохранять scaleX сам.
+ */
+function applyTurnClass(entity, turn) {
+    if (!entity) return;
+    entity.classList.toggle('turn-left', turn === 'LEFT');
+}
+
+/**
  * Обновить существующий элемент игрока
  */
 function updatePlayerEntity(entity, player) {
@@ -590,8 +602,13 @@ function updatePlayerEntity(entity, player) {
         statusEl.textContent = player.STATUS.toLowerCase();
     }
     
-    // Обновляем класс статуса
-    entity.className = 'entity player-entity status-' + player.STATUS.toLowerCase();
+    // Обновляем класс статуса.
+    // ВАЖНО: turn-left НЕ должен затираться — TURN приходит с сервера отдельно.
+    entity.classList.remove('status-idle', 'status-moving', 'status-attack', 'status-ability', 'status-death', 'status-decay', 'status-stunned');
+    entity.classList.add('status-' + player.STATUS.toLowerCase());
+    
+    // Отражение спрайта по направлению TURN (только лево/право)
+    applyTurnClass(entity, player.TURN);
     
     // Обновляем HP bar
     const hpFill = entity.querySelector('.entity-hp-fill');
@@ -675,20 +692,23 @@ function animateMove(animKey) {
         targetCell.appendChild(entity);
     }
     
-    // Применяем плавное смещение внутри клетки
-    entity.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+    // Применяем плавное смещение внутри клетки.
+    // ВАЖНО: scaleX должен сохраняться — иначе отражение (turn-left) теряется во время пути.
+    const flip = entity.classList.contains('turn-left') ? ' scaleX(-1)' : '';
+    entity.style.transform = `translate(${offsetX}px, ${offsetY}px)` + flip;
     
     // Продолжаем анимацию если не завершена
     if (progress < 1) {
         requestAnimationFrame(() => animateMove(animKey));
     } else {
-        // Анимация завершена - убираем transform
+        // Анимация завершена - убираем transform (отражение обеспечивает класс turn-left через CSS)
         entity.style.transform = '';
         state.animations.delete(animKey);
         
-        // Синхронизируем позицию с сервером (если есть данные)
+        // Синхронизируем позицию и направление с сервером (если есть данные)
         if (state.data && state.data.players && state.data.players[anim.playerId]) {
             const player = state.data.players[anim.playerId];
+            applyTurnClass(entity, player.TURN);
             const finalPos = parseXY(player.CUR_POSITION_XY);
             const finalCell = document.getElementById(`cell-${finalPos.x}-${finalPos.y}`);
             if (finalCell && entity.parentElement !== finalCell) {
@@ -863,6 +883,9 @@ function renderGrid(data) {
                         }
                     });
                     
+                    // Мгновенно доворачиваем спрайт по серверному TURN (не дожидаясь следующего поллинга)
+                    applyTurnClass(entity, player.TURN);
+                    
                     // Запускаем новую анимацию
                     startMoveAnimation(pid, startPos, endPos, player.MOVE_START_TIME, player.MOVE_END_TIME, animKey);
                 }
@@ -980,6 +1003,8 @@ function createPlayerEntity(player, pid) {
     if (status === 'removed') return null;
     
     el.className = 'entity player-entity status-' + status;
+    // Отражение спрайта при первичной отрисовке (TURN из battledata.json / сервера)
+    applyTurnClass(el, player.TURN);
     el.style.backgroundColor = player.COLOR || '#888';
     el.style.borderColor = pid === state.playerId ? '#ffffff' : (player.COLOR || '#888');
     

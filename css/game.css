@@ -341,6 +341,66 @@ body {
     80% { transform: translateX(2px); }
 }
 
+/* === Отражение спрайта по направлению TURN (только лево/право) === */
+/* Класс turn-left навешивает js/game.js (applyTurnClass) на основе серверного поля TURN.
+   ВНИМАНИЕ: анимации статусов ниже используют только filter — не добавляйте в них
+   keyframes с transform, иначе они перекроют scaleX и отражение «пропадёт» во время анимации. */
+.entity.player-entity.turn-left {
+    transform: scaleX(-1);
+}
+
+/* Анимация движения идёт через inline transform (translate + scaleX) из animateMove(),
+   поэтому idle-bounce отключаем — иначе он перезапишет смещение и спрайт «прыгнет» на клетку назад */
+.entity.player-entity.status-moving {
+    animation: none;
+}
+
+/* Статусные keyframes со transform (idle/death/decay/stun) перекрывают CSS-правило отражения,
+   поэтому для turn-left задаём их flipped-варианты: та же анимация, но домноженная на scaleX(-1).
+   attack-flash и ability-glow менять не нужно: scale()/filter корректно перемножаются с scaleX. */
+.entity.player-entity.turn-left.status-idle {
+    animation-name: idle-bounce-flipped;
+}
+
+@keyframes idle-bounce-flipped {
+    0%, 100% { transform: scaleX(-1) translateY(0); }
+    50% { transform: scaleX(-1) translateY(-2px); }
+}
+
+.entity.player-entity.turn-left.status-death {
+    animation-name: death-animation-flipped;
+}
+
+@keyframes death-animation-flipped {
+    0% { transform: scaleX(-1) scale(1) rotate(0); opacity: 1; filter: brightness(1); }
+    25% { transform: scaleX(-1) scale(1.2) rotate(5deg); filter: brightness(2) hue-rotate(0deg); }
+    50% { transform: scaleX(-1) scale(0.8) rotate(-5deg); filter: brightness(0.5) hue-rotate(180deg); }
+    75% { transform: scaleX(-1) scale(0.6) rotate(3deg); filter: brightness(0.3) grayscale(0.5); }
+    100% { transform: scaleX(-1) scale(0.5) rotate(-15deg); opacity: 0.4; filter: brightness(0.2) grayscale(1); }
+}
+
+.entity.player-entity.turn-left.status-decay {
+    animation-name: decay-animation-flipped;
+}
+
+@keyframes decay-animation-flipped {
+    0% { transform: scaleX(-1) scale(0.5) rotate(-15deg); opacity: 0.4; filter: grayscale(1); }
+    50% { transform: scaleX(-1) scale(0.3) rotate(-20deg); opacity: 0.2; filter: grayscale(1) brightness(0.5); }
+    100% { transform: scaleX(-1) scale(0) rotate(-30deg); opacity: 0; filter: grayscale(1) brightness(0); }
+}
+
+.entity.player-entity.turn-left.status-stunned {
+    animation-name: stun-shake-flipped;
+}
+
+@keyframes stun-shake-flipped {
+    0%, 100% { transform: scaleX(-1) translateX(0); }
+    20% { transform: scaleX(-1) translateX(-3px); }
+    40% { transform: scaleX(-1) translateX(3px); }
+    60% { transform: scaleX(-1) translateX(-2px); }
+    80% { transform: scaleX(-1) translateX(2px); }
+}
+
 /* Object entity */
 .entity.object-entity {
     background: #555;
