@@ -67,8 +67,9 @@ try {
         ]]
     ];
     
-    // Подключаем items.php для функции calculateThreatZone
-    require_once __DIR__ . '/items.php';
+    // battle.php подключает abilities.php, items.php и objects.php
+    // (нужен calculateThreatZone из objects.php для зон угрозы NPC)
+    require_once __DIR__ . '/battle.php';
     
     // Вычисляем зоны угрозы для всех NPC
     foreach ($state['npcs'] as $npc_id => &$npc) {

@@ -13,8 +13,7 @@ ob_start();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/battle.php';
-require_once __DIR__ . '/abilities.php';
-require_once __DIR__ . '/items.php';
+// abilities.php, items.php и objects.php уже подключены через battle.php
 
 setCorsHeaders();
 
