@@ -855,9 +855,11 @@ function renderGrid(data) {
         Object.keys(data.players).forEach(pid => {
             const player = data.players[pid];
             
-            // Удаляем элемент если игрок удалён из боя (REMOVED)
-            // или отыграл обе стадии анимации смерти (DEATH -> DECAY)
-            if (player.STATUS === 'REMOVED' || player.STATUS === 'DECAY') {
+            // Удаляем элемент только когда игрок полностью убран из боя сервером (REMOVED).
+            // Стадии DEATH/DECAY НЕ удаляем — div должен оставаться на поле всё время
+            // проигрывания обеих анимаций (по 1 секунде на стадию), респавн/удаление
+            // происходит на сервере после DECAY.
+            if (player.STATUS === 'REMOVED') {
                 const existing = document.querySelector(`[data-player-id="${pid}"]`);
                 if (existing) existing.remove();
                 return;
