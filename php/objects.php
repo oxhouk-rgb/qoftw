@@ -219,6 +219,12 @@ function checkThreatZoneIntersection(&$state, $player_id, $x, $y) {
             $damage = $npc['ATTACK'];
             $npc['ACTIONS']--; // Тратим действие (атакует только один раз за ход)
 
+            // Включаем анимацию ATTACK (сбросится в IDLE через updateNpcStatuses)
+            if ($npc['STATUS'] !== 'ATTACK') {
+                $npc['STATUS'] = 'ATTACK';
+                unset($npc['ATTACK_TIME']); // старт новой анимации
+            }
+
             $state = addLog($state, "NPC {$npc_id}: атакует {$player_id} при пересечении зоны на клетке ({$x},{$y})");
 
             // Применяем урон с учётом щита
@@ -264,6 +270,31 @@ function checkThreatZoneIntersection(&$state, $player_id, $x, $y) {
     }
 
     return $results;
+}
+
+/**
+ * Обновить статусы NPC-анимаций (вызывается каждый тик из poll.php)
+ *
+ * Логика: когда NPC атакует (в checkThreatZoneIntersection), он получает
+ * STATUS = 'ATTACK' и метку ATTACK_TIME. Через 1 секунду (как и игроки
+ * в resetAttackStatus) статус возвращается в IDLE, анимация "attack"
+ * проигрывается один раз.
+ */
+function updateNpcStatuses(&$state) {
+    $now = time();
+
+    foreach ($state['npcs'] as $nid => &$npc) {
+        if ($npc['STATUS'] === 'DESTROYED' || $npc['STATUS'] === 'DEATH') continue;
+
+        if ($npc['STATUS'] === 'ATTACK') {
+            if (!isset($npc['ATTACK_TIME'])) {
+                $npc['ATTACK_TIME'] = $now;
+            } elseif ($now - $npc['ATTACK_TIME'] >= 1) {
+                $npc['STATUS'] = 'IDLE';
+                unset($npc['ATTACK_TIME']);
+            }
+        }
+    }
 }
 
 /**

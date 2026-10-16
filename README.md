@@ -171,7 +171,7 @@ define('REDIS_DB', 0);
 ### Объекты, ловушки и NPC
 - **Объекты** (бочки, `objects`): имеют HP, разрушаются от урона, блокируют клетки
 - **Ловушки** (`traps`): мина MINE1 — при входе на клетку наносит урон и накладывает эффекты (STUNNED[2], BLEED[2]) по радиусу RANGE
-- **NPC** (`npcs`): турель TURRET1 — AI в `processNPCs()`, сама выбирает цель и атакует; есть «зоны угрозы» (`calculateThreatZone` / `checkThreatZoneIntersection`) — вход игрока в зону провоцирует NPC
+- **NPC** (`npcs`, логика в `php/objects.php`): турель TURRET1 — «зоны угрозы» (`calculateThreatZone` / `checkThreatZoneIntersection`): вход игрока (в т.ч. во время движения) в зону провоцирует NPC на выстрел; при выстреле NPC переходит в STATUS = 'ATTACK' (анимация), сброс в IDLE — `updateNpcStatuses()` каждый тик в poll.php
 
 ## Тестовые персонажи
 
