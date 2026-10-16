@@ -13,7 +13,7 @@ ob_start();
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/battle.php';
-require_once __DIR__ . '/items.php';
+// items.php и objects.php уже подключены через battle.php
 
 setCorsHeaders();
 
@@ -59,6 +59,13 @@ while (true) {
         updateDeathAnimations($state);
         updateProjectiles($state);
         resetAttackStatus($state);
+        $npcs_before = json_encode($state['npcs']);
+        updateNpcStatuses($state);
+        // Если NPC сменил статус (ATTACK -> IDLE) - бум версии,
+        // чтобы клиенты получили обновление анимации сразу, не дожидаясь хода
+        if (json_encode($state['npcs']) !== $npcs_before) {
+            $redis->incr(REDIS_VERSION);
+        }
         saveBattleState($state);
         
         // Проверяем появилась ли новая версия

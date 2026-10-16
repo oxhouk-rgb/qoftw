@@ -116,6 +116,15 @@ try {
     echo "File: " . $e->getFile() . ":" . $e->getLine() . "\n";
 }
 
+echo "\n=== Try loading objects.php ===\n";
+try {
+    require_once __DIR__ . '/objects.php';
+    echo "✅ objects.php loaded OK\n";
+} catch (Throwable $e) {
+    echo "❌ objects.php error: " . $e->getMessage() . "\n";
+    echo "File: " . $e->getFile() . ":" . $e->getLine() . "\n";
+}
+
 echo "\n=== Try init.php logic ===\n";
 try {
     $data_file = __DIR__ . '/../data/battledata.json';
