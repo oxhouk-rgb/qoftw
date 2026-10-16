@@ -125,11 +125,10 @@ function processMove(&$state, $player_id, $target_x, $target_y) {
     $state['players'][$player_id]['STATUS'] = 'MOVING';
     $state['players'][$player_id]['ACTIONS']--;
     
-    // Определяем направление
+    // Направление спрайта (TURN): только лево/право.
+    // Горизонтальное движение переписывает TURN, вертикальное — сохраняет последнее.
     if ($target_x > $cur_pos['x']) $state['players'][$player_id]['TURN'] = 'RIGHT';
     elseif ($target_x < $cur_pos['x']) $state['players'][$player_id]['TURN'] = 'LEFT';
-    elseif ($target_y > $cur_pos['y']) $state['players'][$player_id]['TURN'] = 'DOWN';
-    elseif ($target_y < $cur_pos['y']) $state['players'][$player_id]['TURN'] = 'UP';
     
     // Рассчитываем время перемещения (3 клетки в секунду)
     $move_time = $distance / MOVE_SPEED;
@@ -352,11 +351,10 @@ function processAttack(&$state, $attacker_id, $target_x, $target_y) {
     $state['players'][$attacker_id]['STATUS'] = 'ATTACK';
     $state['players'][$attacker_id]['ATTACK_TIME'] = time();
     
-    // Направление атаки
+    // Направление спрайта (TURN): только лево/право.
+    // Горизонтальная атака переписывает TURN, вертикальная — сохраняет последнее.
     if ($target_x > $attacker_pos['x']) $state['players'][$attacker_id]['TURN'] = 'RIGHT';
     elseif ($target_x < $attacker_pos['x']) $state['players'][$attacker_id]['TURN'] = 'LEFT';
-    elseif ($target_y > $attacker_pos['y']) $state['players'][$attacker_id]['TURN'] = 'DOWN';
-    elseif ($target_y < $attacker_pos['y']) $state['players'][$attacker_id]['TURN'] = 'UP';
     
     return [
         'success' => true,
