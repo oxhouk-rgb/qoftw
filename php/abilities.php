@@ -470,6 +470,16 @@ function applyNegativeEffect(&$state, $target_id, $target_type, $effect_str) {
     if (!$found) {
         $player['NEGATIVES'][] = $effect_str;
     }
+
+    // Немедленная активация оглушения: эффект, полученный вне хода игрока
+    // (ловушка, способность, ответный урон), должен отражаться на STATUS
+    // сразу — иначе клиент увидит «оглушённого» только на следующем ходе.
+    // Во время движения статус не трогаем (MOVING важнее, спрайт доезжает
+    // до клетки сам; STUNNED будет выставлен в updateMovements при финале).
+    if ($effect_name === 'STUNNED' && $player['STATUS'] !== 'MOVING' && $player['STATUS'] !== 'DEATH' && $player['STATUS'] !== 'DECAY') {
+        $player['STATUS'] = 'STUNNED';
+        $player['ACTIONS'] = 0;
+    }
 }
 
 /**
