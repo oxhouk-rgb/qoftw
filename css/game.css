@@ -291,10 +291,11 @@ body {
     animation: attack-flash 0.3s;
 }
 
+/* ВАЖНО: только filter/box-shadow, без transform — иначе keyframes перекроют scaleX(-1) отражения */
 @keyframes attack-flash {
-    0% { transform: scale(1); filter: brightness(1); }
-    50% { transform: scale(1.2); filter: brightness(2); }
-    100% { transform: scale(1); filter: brightness(1); }
+    0% { filter: brightness(1); box-shadow: 0 0 0 rgba(255, 255, 255, 0); }
+    50% { filter: brightness(2); box-shadow: 0 0 14px rgba(255, 255, 255, 0.8); }
+    100% { filter: brightness(1); box-shadow: 0 0 0 rgba(255, 255, 255, 0); }
 }
 
 .entity.status-ability {
@@ -307,26 +308,29 @@ body {
     100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
 }
 
+/* DEATH/DECAY: простое проигрывание содержимого блока по 1 секунде на стадию
+   (сервер: DEATH_TIME -> DECAY_TIME -> удаление из состояния).
+   Никаких opacity/scale-эффектов и "forwards" — в будущем здесь будут спрайт-анимации.
+   Единственный transform — scaleX для отражения TURN (flipped-варианты ниже не нужны:
+   базовый keyframe уже домножается на переменную флипа). */
 .entity.status-death {
-    animation: death-animation 1s forwards;
+    --turn-flip: 1;
+    animation: death-animation 1s infinite;
 }
 
 @keyframes death-animation {
-    0% { transform: scale(1) rotate(0); opacity: 1; filter: brightness(1); }
-    25% { transform: scale(1.2) rotate(-5deg); filter: brightness(2) hue-rotate(0deg); }
-    50% { transform: scale(0.8) rotate(5deg); filter: brightness(0.5) hue-rotate(180deg); }
-    75% { transform: scale(0.6) rotate(-3deg); filter: brightness(0.3) grayscale(0.5); }
-    100% { transform: scale(0.5) rotate(15deg); opacity: 0.4; filter: brightness(0.2) grayscale(1); }
+    0%, 100% { transform: scaleX(var(--turn-flip)) rotate(0); filter: brightness(1); }
+    50% { transform: scaleX(var(--turn-flip)) rotate(-4deg); filter: brightness(0.7); }
 }
 
 .entity.status-decay {
-    animation: decay-animation 1s forwards;
+    --turn-flip: 1;
+    animation: decay-animation 1s infinite;
 }
 
 @keyframes decay-animation {
-    0% { transform: scale(0.5) rotate(15deg); opacity: 0.4; filter: grayscale(1); }
-    50% { transform: scale(0.3) rotate(20deg); opacity: 0.2; filter: grayscale(1) brightness(0.5); }
-    100% { transform: scale(0) rotate(30deg); opacity: 0; filter: grayscale(1) brightness(0); }
+    0%, 100% { transform: scaleX(var(--turn-flip)); filter: grayscale(0.4) brightness(0.9); }
+    50% { transform: scaleX(var(--turn-flip)); filter: grayscale(1) brightness(0.6); }
 }
 
 .entity.status-stunned {
@@ -367,26 +371,11 @@ body {
     50% { transform: scaleX(-1) translateY(-2px); }
 }
 
-.entity.player-entity.turn-left.status-death {
-    animation-name: death-animation-flipped;
-}
-
-@keyframes death-animation-flipped {
-    0% { transform: scaleX(-1) scale(1) rotate(0); opacity: 1; filter: brightness(1); }
-    25% { transform: scaleX(-1) scale(1.2) rotate(5deg); filter: brightness(2) hue-rotate(0deg); }
-    50% { transform: scaleX(-1) scale(0.8) rotate(-5deg); filter: brightness(0.5) hue-rotate(180deg); }
-    75% { transform: scaleX(-1) scale(0.6) rotate(3deg); filter: brightness(0.3) grayscale(0.5); }
-    100% { transform: scaleX(-1) scale(0.5) rotate(-15deg); opacity: 0.4; filter: brightness(0.2) grayscale(1); }
-}
-
+/* DEATH/DECAY отражаются через переменную --turn-flip в своих keyframes (см. выше),
+   отдельные flipped-анимации им не нужны */
+.entity.player-entity.turn-left.status-death,
 .entity.player-entity.turn-left.status-decay {
-    animation-name: decay-animation-flipped;
-}
-
-@keyframes decay-animation-flipped {
-    0% { transform: scaleX(-1) scale(0.5) rotate(-15deg); opacity: 0.4; filter: grayscale(1); }
-    50% { transform: scaleX(-1) scale(0.3) rotate(-20deg); opacity: 0.2; filter: grayscale(1) brightness(0.5); }
-    100% { transform: scaleX(-1) scale(0) rotate(-30deg); opacity: 0; filter: grayscale(1) brightness(0); }
+    --turn-flip: -1;
 }
 
 .entity.player-entity.turn-left.status-stunned {

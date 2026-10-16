@@ -538,7 +538,9 @@ function updateProjectiles(&$state) {
  */
 function resetAttackStatus(&$state) {
     foreach ($state['players'] as $pid => &$player) {
-        if ($player['STATUS'] === 'ATTACK') {
+        // Анимация способности (ABILITY) тоже возвращается в IDLE через 1 сек
+        // (ATTACK_TIME ставится и для ATTACK, и для ABILITY в action.php)
+        if ($player['STATUS'] === 'ATTACK' || $player['STATUS'] === 'ABILITY') {
             // Через 1 секунду возвращаем в IDLE
             if (!isset($player['ATTACK_TIME'])) {
                 $player['ATTACK_TIME'] = time();

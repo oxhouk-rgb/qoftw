@@ -120,6 +120,12 @@ try {
                 $state['players'][$player_id]['ACTIONS']--;
                 $state['players'][$player_id]['STATUS'] = 'ABILITY';
                 $state['players'][$player_id]['ATTACK_TIME'] = time();
+                // Направление спрайта (TURN): только лево/право.
+                // Горизонтальное применение способности переписывает TURN,
+                // вертикальное / самоприменение — сохраняет последнее направление.
+                $ab_pos = parseXY($state['players'][$player_id]['CUR_POSITION_XY']);
+                if ($target_x > $ab_pos['x']) $state['players'][$player_id]['TURN'] = 'RIGHT';
+                elseif ($target_x < $ab_pos['x']) $state['players'][$player_id]['TURN'] = 'LEFT';
                 $result = $ability_result;
             } else {
                 $result = $ability_result;

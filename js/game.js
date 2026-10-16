@@ -519,7 +519,7 @@ function showActionDialog(x, y) {
                        (abRange === 0 || lineOfSight); // Для range=0 (самоприменение) не нужна линия видимости
         btnAb1.disabled = !canUse;
         btnAb1.style.display = '';
-        btnAb1.onclick = () => { sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
+        btnAb1.onclick = () => { previewTurn(x, y); sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
     } else {
         btnAb1.style.display = 'none';
     }
@@ -535,7 +535,7 @@ function showActionDialog(x, y) {
                        (abRange === 0 || lineOfSight);
         btnAb2.disabled = !canUse;
         btnAb2.style.display = '';
-        btnAb2.onclick = () => { sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
+        btnAb2.onclick = () => { previewTurn(x, y); sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
     } else {
         btnAb2.style.display = 'none';
     }
@@ -551,14 +551,14 @@ function showActionDialog(x, y) {
                        (abRange === 0 || lineOfSight);
         btnAb3.disabled = !canUse;
         btnAb3.style.display = '';
-        btnAb3.onclick = () => { sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
+        btnAb3.onclick = () => { previewTurn(x, y); sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
     } else {
         btnAb3.style.display = 'none';
     }
     
     // Обработчики для move и attack
     btnMove.onclick = () => { sendAction('move', { x: x, y: y }); closeDialog(); };
-    btnAttack.onclick = () => { sendAction('attack', { x: x, y: y }); closeDialog(); };
+    btnAttack.onclick = () => { previewTurn(x, y); sendAction('attack', { x: x, y: y }); closeDialog(); };
     
     // Позиционируем диалог рядом с кликом
     dialog.style.left = '50%';
@@ -579,6 +579,23 @@ function closeDialog() {
 document.getElementById('btn-close-dialog').addEventListener('click', closeDialog);
 
 // === РЕНДЕРИНГ ===
+
+/**
+ * Мгновенный «превью» поворота собственного игрока при клике Attack/Ability.
+ * Повторяет серверную формулу TURN (battle.php/action.php): горизонтальное
+ * действие переписывает направление, вертикальное — сохраняет последнее.
+ * Нужен, потому что статус ATTACK/ABILITY приходит с сервера быстрее,
+ * чем обновлённый TURN (тот доедет только со следующим long-poll ответом).
+ */
+function previewTurn(targetX, targetY) {
+    if (!state.data) return;
+    const player = state.data.players[state.playerId];
+    if (!player) return;
+    const pos = parseXY(player.CUR_POSITION_XY);
+    if (targetX === pos.x) return; // вертикальное действие — направление не меняем
+    const entity = document.querySelector(`[data-player-id="${state.playerId}"]`);
+    if (entity) applyTurnClass(entity, targetX < pos.x ? 'LEFT' : 'RIGHT');
+}
 
 /**
  * Применить отражение спрайта по направлению TURN.
@@ -838,8 +855,9 @@ function renderGrid(data) {
         Object.keys(data.players).forEach(pid => {
             const player = data.players[pid];
             
-            // Удаляем элемент если игрок удалён
-            if (player.STATUS === 'REMOVED') {
+            // Удаляем элемент если игрок удалён из боя (REMOVED)
+            // или отыграл обе стадии анимации смерти (DEATH -> DECAY)
+            if (player.STATUS === 'REMOVED' || player.STATUS === 'DECAY') {
                 const existing = document.querySelector(`[data-player-id="${pid}"]`);
                 if (existing) existing.remove();
                 return;
