@@ -162,9 +162,10 @@ function ability_hit_targets(&$state, $caster_id, $ability, $targets) {
     $caster = $state['players'][$caster_id];
     $hits = [];
     foreach ($targets as $target) {
-        $damage = calculateDamage($ability['damage'], $caster['ATTACK'], $target['resistance']);
+        $damage = calculateDamage($ability['damage'], $caster['ATTACK'], $target['resistance'],
+                                  combat_should_pierce_resistance($state, ['type' => 'player', 'id' => $caster_id]));
         $res = combat_apply_damage($state, $target['type'], $target['id'], $damage,
-                                   ['type' => 'ability', 'id' => $caster_id]);
+                                   ['type' => 'player', 'id' => $caster_id]);
         foreach ($ability['effect'] as $effect) {
             effects_apply($state, $target['type'], $target['id'], $effect);
         }
