@@ -8,166 +8,190 @@ error_reporting(0);
 ini_set('display_errors', '0');
 
 // Redis настройки
-define('REDIS_HOST', '127.0.0.1');
-define('REDIS_PORT', 6379);
-define('REDIS_DB', 0);
+if (!defined('REDIS_HOST')) define('REDIS_HOST', '127.0.0.1');
+if (!defined('REDIS_PORT')) define('REDIS_PORT', 6379);
+if (!defined('REDIS_DB')) define('REDIS_DB', 0);
 
-// Константы игры
-define('GRID_WIDTH', 16);
-define('GRID_HEIGHT', 12);
-define('MAX_MOVE_DISTANCE', 5);
-define('LONG_POLL_TIMEOUT', 25); // секунд таймаут long polling
-define('MOVE_SPEED', 3); // клеток в секунду
-define('TURN_DURATION', 5); // секунд между обновлениями очков действий
+// Константы игры — ЗДЕСЬ НЕ ОПРЕДЕЛЯЮТСЯ.
+// Единый источник игровых правил (GRID_*, MOVE_SPEED, TURN_DURATION,
+// MAX_MOVE_DISTANCE, LONG_POLL_TIMEOUT и т.д.) — php/engine/rules.php.
+// config.php отвечает только за Redis-коннект, ключи и JSON-хелперы.
+// (Раньше здесь был дубль констант, из-за которого при двойном подключении
+// возникал фатальный "Constant already defined" → HTTP 500.)
 
 // Ключи Redis
-define('REDIS_PREFIX', 'battle:');
-define('REDIS_PLAYERS', REDIS_PREFIX . 'players');
-define('REDIS_OBJECTS', REDIS_PREFIX . 'objects');
-define('REDIS_TRAPS', REDIS_PREFIX . 'traps');
-define('REDIS_NPCS', REDIS_PREFIX . 'npcs');
-define('REDIS_ROOM', REDIS_PREFIX . 'room');
-define('REDIS_TURN_TIME', REDIS_PREFIX . 'turn_time');
-define('REDIS_PROJECTILES', REDIS_PREFIX . 'projectiles');
-define('REDIS_VERSION', REDIS_PREFIX . 'version');
-define('REDIS_LOG', REDIS_PREFIX . 'log');
+if (!defined('REDIS_PREFIX')) define('REDIS_PREFIX', 'battle:');
+if (!defined('REDIS_PLAYERS')) define('REDIS_PLAYERS', REDIS_PREFIX . 'players');
+if (!defined('REDIS_OBJECTS')) define('REDIS_OBJECTS', REDIS_PREFIX . 'objects');
+if (!defined('REDIS_TRAPS')) define('REDIS_TRAPS', REDIS_PREFIX . 'traps');
+if (!defined('REDIS_NPCS')) define('REDIS_NPCS', REDIS_PREFIX . 'npcs');
+if (!defined('REDIS_ROOM')) define('REDIS_ROOM', REDIS_PREFIX . 'room');
+if (!defined('REDIS_TURN_TIME')) define('REDIS_TURN_TIME', REDIS_PREFIX . 'turn_time');
+if (!defined('REDIS_PROJECTILES')) define('REDIS_PROJECTILES', REDIS_PREFIX . 'projectiles');
+if (!defined('REDIS_VERSION')) define('REDIS_VERSION', REDIS_PREFIX . 'version');
+if (!defined('REDIS_LOG')) define('REDIS_LOG', REDIS_PREFIX . 'log');
 
 // Подключение к Redis
-function getRedis() {
-    static $redis = null;
-    if ($redis === null) {
-        // Проверяем наличие расширения Redis
-        if (!class_exists('Redis')) {
-            throw new Exception('Расширение PHP Redis не установлено. Установите php_redis.dll (Windows) или phpredis (Linux)');
-        }
-        
-        try {
-            $redis = new Redis();
-            $connected = @$redis->connect(REDIS_HOST, REDIS_PORT, 2); // 2 сек таймаут
-            if (!$connected) {
-                throw new Exception('Не удалось подключиться к Redis на ' . REDIS_HOST . ':' . REDIS_PORT . '. Убедитесь что redis-server запущен!');
+if (!function_exists('getRedis')) {
+    function getRedis() {
+        static $redis = null;
+        if ($redis === null) {
+            // Проверяем наличие расширения Redis
+            if (!class_exists('Redis')) {
+                throw new Exception('Расширение PHP Redis не установлено. Установите php_redis.dll (Windows) или phpredis (Linux)');
             }
-            $redis->select(REDIS_DB);
-            $redis->setOption(Redis::OPT_READ_TIMEOUT, 2); // Таймаут чтения 2 секунды
-        } catch (Throwable $e) {
-            throw new Exception('Redis ошибка: ' . $e->getMessage());
+        
+            try {
+                $redis = new Redis();
+                $connected = @$redis->connect(REDIS_HOST, REDIS_PORT, 2); // 2 сек таймаут
+                if (!$connected) {
+                    throw new Exception('Не удалось подключиться к Redis на ' . REDIS_HOST . ':' . REDIS_PORT . '. Убедитесь что redis-server запущен!');
+                }
+                $redis->select(REDIS_DB);
+                $redis->setOption(Redis::OPT_READ_TIMEOUT, 2); // Таймаут чтения 2 секунды
+            } catch (Throwable $e) {
+                throw new Exception('Redis ошибка: ' . $e->getMessage());
+            }
         }
+        return $redis;
     }
-    return $redis;
 }
 
 // Закрытие Redis соединения
-function closeRedis() {
-    static $redis = null;
-    if ($redis !== null) {
-        try {
-            $redis->close();
-        } catch (Throwable $e) {
-            // Игнорируем ошибки закрытия
+if (!function_exists('closeRedis')) {
+    function closeRedis() {
+        static $redis = null;
+        if ($redis !== null) {
+            try {
+                $redis->close();
+            } catch (Throwable $e) {
+                // Игнорируем ошибки закрытия
+            }
+            $redis = null;
         }
-        $redis = null;
     }
 }
 
 // Получить все данные состояния боя
-function getBattleState() {
-    $redis = getRedis();
-    $pipe = $redis->multi(Redis::PIPELINE);
-    $pipe->get(REDIS_PLAYERS);
-    $pipe->get(REDIS_OBJECTS);
-    $pipe->get(REDIS_TRAPS);
-    $pipe->get(REDIS_NPCS);
-    $pipe->get(REDIS_ROOM);
-    $pipe->get(REDIS_TURN_TIME);
-    $pipe->get(REDIS_PROJECTILES);
-    $pipe->get(REDIS_VERSION);
-    $pipe->get(REDIS_LOG);
-    $results = $pipe->exec();
+if (!function_exists('getBattleState')) {
+    function getBattleState() {
+        $redis = getRedis();
+        $pipe = $redis->multi(Redis::PIPELINE);
+        $pipe->get(REDIS_PLAYERS);
+        $pipe->get(REDIS_OBJECTS);
+        $pipe->get(REDIS_TRAPS);
+        $pipe->get(REDIS_NPCS);
+        $pipe->get(REDIS_ROOM);
+        $pipe->get(REDIS_TURN_TIME);
+        $pipe->get(REDIS_PROJECTILES);
+        $pipe->get(REDIS_VERSION);
+        $pipe->get(REDIS_LOG);
+        $results = $pipe->exec();
     
-    return [
-        'players' => json_decode($results[0], true) ?: [],
-        'objects' => json_decode($results[1], true) ?: [],
-        'traps' => json_decode($results[2], true) ?: [],
-        'npcs' => json_decode($results[3], true) ?: [],
-        'room' => json_decode($results[4], true) ?: [],
-        'turn_time' => (int)$results[5],
-        'projectiles' => json_decode($results[6], true) ?: [],
-        'version' => (int)$results[7],
-        'log' => json_decode($results[8], true) ?: []
-    ];
+        return [
+            'players' => json_decode($results[0], true) ?: [],
+            'objects' => json_decode($results[1], true) ?: [],
+            'traps' => json_decode($results[2], true) ?: [],
+            'npcs' => json_decode($results[3], true) ?: [],
+            'room' => json_decode($results[4], true) ?: [],
+            'turn_time' => (int)$results[5],
+            'projectiles' => json_decode($results[6], true) ?: [],
+            'version' => (int)$results[7],
+            'log' => json_decode($results[8], true) ?: []
+        ];
+    }
 }
 
 // Сохранить состояние боя
-function saveBattleState($state) {
-    $redis = getRedis();
-    $pipe = $redis->multi(Redis::PIPELINE);
-    $pipe->set(REDIS_PLAYERS, json_encode($state['players']));
-    $pipe->set(REDIS_OBJECTS, json_encode($state['objects']));
-    $pipe->set(REDIS_TRAPS, json_encode($state['traps']));
-    $pipe->set(REDIS_NPCS, json_encode($state['npcs']));
-    $pipe->set(REDIS_ROOM, json_encode($state['room']));
-    $pipe->set(REDIS_TURN_TIME, $state['turn_time']);
-    $pipe->set(REDIS_PROJECTILES, json_encode($state['projectiles']));
-    $pipe->incr(REDIS_VERSION);
-    $pipe->set(REDIS_LOG, json_encode($state['log']));
-    $pipe->exec();
+if (!function_exists('saveBattleState')) {
+    function saveBattleState($state) {
+        $redis = getRedis();
+        $pipe = $redis->multi(Redis::PIPELINE);
+        $pipe->set(REDIS_PLAYERS, json_encode($state['players']));
+        $pipe->set(REDIS_OBJECTS, json_encode($state['objects']));
+        $pipe->set(REDIS_TRAPS, json_encode($state['traps']));
+        $pipe->set(REDIS_NPCS, json_encode($state['npcs']));
+        $pipe->set(REDIS_ROOM, json_encode($state['room']));
+        $pipe->set(REDIS_TURN_TIME, $state['turn_time']);
+        $pipe->set(REDIS_PROJECTILES, json_encode($state['projectiles']));
+        $pipe->incr(REDIS_VERSION);
+        $pipe->set(REDIS_LOG, json_encode($state['log']));
+        $pipe->exec();
+    }
 }
 
 // Добавить запись в лог
-function addLog($state, $message) {
-    $state['log'][] = [
-        'time' => time(),
-        'message' => $message
-    ];
-    // Храним только последние 50 записей
-    if (count($state['log']) > 50) {
-        $state['log'] = array_slice($state['log'], -50);
+if (!function_exists('addLog')) {
+    function addLog($state, $message) {
+        $state['log'][] = [
+            'time' => time(),
+            'message' => $message
+        ];
+        // Храним только последние 50 записей
+        if (count($state['log']) > 50) {
+            $state['log'] = array_slice($state['log'], -50);
+        }
+        return $state;
     }
-    return $state;
 }
 
-// Парсинг координат "X,Y" в массив
-function parseXY($xy) {
-    $parts = explode(',', $xy);
-    return ['x' => (int)$parts[0], 'y' => (int)$parts[1]];
+// Парсинг координат "X,Y" в массив.
+// Единый владелец этих функций — engine/geometry.php; здесь они только
+// подхватываются, если config.php используется standalone (debug-скрипты),
+// чтобы при совместной загрузке не было фатального "Cannot redeclare".
+if (!function_exists('parseXY')) {
+    function parseXY($xy) {
+        $parts = explode(',', $xy);
+        return ['x' => (int)$parts[0], 'y' => (int)$parts[1]];
+    }
 }
 
 // Форматирование координат в строку (поддерживает дробные значения)
-function formatXY($x, $y) {
-    // Если значения целые - форматируем как целые
-    if (floor($x) == $x && floor($y) == $y) {
-        return ((int)$x) . ',' . ((int)$y);
+if (!function_exists('formatXY')) {
+    function formatXY($x, $y) {
+        // Если значения целые - форматируем как целые
+        if (floor($x) == $x && floor($y) == $y) {
+            return ((int)$x) . ',' . ((int)$y);
+        }
+        // Иначе с точностью до 2 знаков
+        return round($x, 2) . ',' . round($y, 2);
     }
-    // Иначе с точностью до 2 знаков
-    return round($x, 2) . ',' . round($y, 2);
 }
 
 // Проверка валидности координат
-function isValidPosition($x, $y) {
-    return $x >= 0 && $x < GRID_WIDTH && $y >= 0 && $y < GRID_HEIGHT;
+if (!function_exists('isValidPosition')) {
+    function isValidPosition($x, $y) {
+        return $x >= 0 && $x < GRID_WIDTH && $y >= 0 && $y < GRID_HEIGHT;
+    }
 }
 
 // CORS заголовки
-function setCorsHeaders() {
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type');
-    header('Content-Type: application/json; charset=utf-8');
+if (!function_exists('setCorsHeaders')) {
+    function setCorsHeaders() {
+        header('Access-Control-Allow-Origin: *');
+        header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+        header('Access-Control-Allow-Headers: Content-Type');
+        header('Content-Type: application/json; charset=utf-8');
+    }
 }
 
 // Безопасный вывод JSON (с обработкой ошибок)
-function jsonResponse($data) {
-    // Очищаем буфер вывода (на случай если PHP что-то вывел до нас)
-    while (ob_get_level()) {
-        ob_end_clean();
+if (!function_exists('jsonResponse')) {
+    function jsonResponse($data) {
+        // Очищаем буфер вывода (на случай если PHP что-то вывел до нас)
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($data, JSON_UNESCAPED_UNICODE);
+        exit;
     }
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE);
-    exit;
 }
 
 // Обработка ошибки с выводом JSON
-function jsonError($message, $code = 500) {
-    http_response_code($code);
-    jsonResponse(['success' => false, 'message' => $message]);
+if (!function_exists('jsonError')) {
+    function jsonError($message, $code = 500) {
+        http_response_code($code);
+        jsonResponse(['success' => false, 'message' => $message]);
+    }
 }
