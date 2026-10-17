@@ -19,8 +19,14 @@
       "ACTIONS": 2,
       "MAX_ACTIONS": 2,
       "RANGE": 5,
-      "ABILITIES": ["FIRE WAVE[3]", "SHOCK GRANADE[4]", "NAPALM GRANADE[5]"],
-      "PASSIVES": ["PUNCTURE"],
+      "ABILITIES": [
+        "FIRE WAVE[3]",
+        "SHOCK GRANADE[4]",
+        "NAPALM GRANADE[5]"
+      ],
+      "PASSIVES": [
+        "PUNCTURE"
+      ],
       "NEGATIVES": [],
       "LIFE": 1,
       "SPAWN_ROOM": "SPAWN",
@@ -45,8 +51,17 @@
       "ACTIONS": 3,
       "MAX_ACTIONS": 3,
       "RANGE": 3,
-      "ABILITIES": ["ICE SHARD[3]", "FROST NOVA[2]", "BLIZZARD[5]"],
-      "PASSIVES": ["ARMORED", "SPLASH", "PUNCTURE"],
+      "ABILITIES": [
+        "ICE SHARD[3]",
+        "FROST NOVA[2]",
+        "BLIZZARD[5]"
+      ],
+      "PASSIVES": [
+        "ARMORED",
+        "SPLASH",
+        "PUNCTURE",
+        "ARMOR_CRUSH"
+      ],
       "NEGATIVES": [],
       "LIFE": 1,
       "SPAWN_ROOM": "SPAWN",
@@ -71,8 +86,15 @@
       "ACTIONS": 3,
       "MAX_ACTIONS": 3,
       "RANGE": 2,
-      "ABILITIES": ["BACKSTAB[1]", "SMOKE BOMB[3]", "POISON BLADE[2]"],
-      "PASSIVES": ["SPLASH"],
+      "ABILITIES": [
+        "BACKSTAB[1]",
+        "SMOKE BOMB[3]",
+        "POISON BLADE[2]"
+      ],
+      "PASSIVES": [
+        "SPLASH",
+        "ARMOR_CRUSH"
+      ],
       "NEGATIVES": [],
       "LIFE": 1,
       "SPAWN_ROOM": "SPAWN",
@@ -97,8 +119,16 @@
       "ACTIONS": 1,
       "MAX_ACTIONS": 1,
       "RANGE": 2,
-      "ABILITIES": ["SHIELD BASH[1]", "FORTIFY[0]", "WAR CRY[3]"],
-      "PASSIVES": ["ARMORED", "REGENERATION", "SPLASH"],
+      "ABILITIES": [
+        "SHIELD BASH[1]",
+        "FORTIFY[0]",
+        "WAR CRY[3]"
+      ],
+      "PASSIVES": [
+        "ARMORED",
+        "REGENERATION",
+        "SPLASH"
+      ],
       "NEGATIVES": [],
       "LIFE": 1,
       "SPAWN_ROOM": "SPAWN",
@@ -131,7 +161,10 @@
       "ROOM_ID": "B1",
       "POSITION_XY": "5,8",
       "RANGE": 1,
-      "EFFECT": ["STUNNED[2]", "BLEED[2]"],
+      "EFFECT": [
+        "STUNNED[2]",
+        "BLEED[2]"
+      ],
       "DAMAGE": 3,
       "STATUS": "INTACT",
       "HITPOINTS": 1
