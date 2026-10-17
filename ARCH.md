@@ -118,12 +118,15 @@ config.php ◀──────────────┬───────
 1. **init**: клиент → `GET php/init.php` → flushDB → загрузка JSON → расчёт THREAT_ZONE →
    `saveBattleState()` (version=1). Каждая новая вкладка перезапускает бой с нуля (осознанно).
 2. **poll-loop** (`poll.php?v=<clientVersion>&player=<ID>`): сервер держит соединение ≤25 с
-   (`LONG_POLL_TIMEOUT`), каждые 0.5 с: читает состояние → при `now-turn_time ≥ TURN_DURATION(5)`
-   новый ход (`processTurnStart` + `processNPCs`, incr version) → поцикловые тики
-   (`updateMovements`, `updateDeathAnimations`, `updateProjectiles`, `resetAttackStatus`,
-   `updateNpcStatuses`; смена статуса NPC сама инкрементит version) → если version вырос,
-   отдаёт **полный snapshot** (players/objects/traps/npcs/room/projectiles/log[-10]/victory/
-   turn_time/time_to_next_turn) и завершает запрос. Иначе по таймауту отдаёт snapshot с `timeout:true`.
+   (`LONG_POLL_TIMEOUT`, `set_time_limit` снят), каждые 0.1 с: читает состояние → поцикловые
+   тики движка (`turn_tick`: movement_update → death chain → projectiles → attack reset →
+   npc statuses) → при `now-turn_time ≥ TURN_DURATION(5)` новый ход (`turn_check_advance` →
+   `turn_start` + emit `turn.start`: passives/effects/combat/objects-слушатели) → world_save
+   (incr version). Если version изменилась, отдаёт **полный flat snapshot**
+   (`version, rules, room, grid, objects, traps, npcs, players, projectiles, log[-30],
+   turn_time, turn_duration, time_to_next_turn, victory`) — КЛЮЧИ ОТВЕТА НА ВЕРХНЕМ УРОВНЕ,
+   без обёртки `data` (клиентский `render(data)` читает `data.players` и т.д. напрямую;
+   исторический контракт). Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
 3. **action**: клиент → `POST php/action.php` (JSON) → валидация → функция battle.php мутирует
    `$state` (by-ref) → при успехе `addLog` + `saveBattleState` (retry ×3) + `incr REDIS_VERSION` →
    все зависшие poll мгновенно отдают новый мир.

@@ -1,117 +1,219 @@
 <?php
 /**
- * init.php - Инициализация боевой сессии (упрощённая версия для отладки)
+ * init.php — Инициализация боя (тонкий слой HTTP над движком).
+ *
+ * Формат данных (КАНОН, сверено с data/battledata.json):
+ *   battledata.json = { players:{NICK:{...}}, objects:{ID:{...}}, traps:{ID:{...}}, npcs:{ID:{...}} }
+ *   SURRENDERED     = { NICK:{...} }              — опционально, бойцы, сдавшиеся в прошлом бою
+ *   комната         = data/<room_id>.json          — только карта: room_id,width,height,grid,exits,stairs
+ *
+ * Собирает состояние и сохраняет через world_init() (flushDB + save c инкрементом версии).
+ * Форматом состояния владеет engine/world.php, правилами — engine/rules.php.
  */
 
-// Включаем все ошибки
-error_reporting(E_ALL);
-ini_set('display_errors', '1');
+require_once __DIR__ . '/engine/bootstrap.php';
 
-// Буферизация вывода
-ob_start();
+setCorsHeaders();
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
 
 try {
-    // Загружаем конфиг
-    require_once __DIR__ . '/config.php';
-    
-    // Устанавливаем заголовки
-    header('Content-Type: application/json; charset=utf-8');
-    header('Access-Control-Allow-Origin: *');
-    
-    // Очищаем буфер (на случай если PHP что-то вывел)
-    ob_clean();
-    
-    // Проверяем Redis
-    $redis = getRedis();
-    
-    // Очищаем предыдущее состояние
-    $redis->flushDB();
-    
-    // Загружаем данные игроков
-    $data_file = __DIR__ . '/../data/battledata.json';
-    if (!file_exists($data_file)) {
-        throw new Exception('Файл не найден: ' . $data_file);
+    // Проверяем расширение Redis
+    if (!extension_loaded('redis')) {
+        jsonError('Расширение Redis не установлено. Выполните: pecl install redis');
     }
-    
-    $json_content = file_get_contents($data_file);
+
+    $battle_data_path = __DIR__ . '/../data/battledata.json';
+    if (!file_exists($battle_data_path)) {
+        jsonError('Файл battledata.json не найден по пути: ' . $battle_data_path);
+    }
+
+    $json_content = file_get_contents($battle_data_path);
+    if ($json_content === false) {
+        jsonError('Не удалось прочитать файл battledata.json');
+    }
+
     $battle_data = json_decode($json_content, true);
-    if (!$battle_data) {
-        throw new Exception('Ошибка парсинга battledata.json: ' . json_last_error_msg());
+    if (!$battle_data || !isset($battle_data['players'])) {
+        jsonError('Ошибка парсинга JSON в battledata.json или отсутствует секция "players": ' . json_last_error_msg());
     }
-    
-    // Загружаем карту комнаты
-    $room_file = __DIR__ . '/../data/B1.json';
-    if (!file_exists($room_file)) {
-        throw new Exception('Файл не найден: ' . $room_file);
+
+    // Комната берётся из ROOM_ID первого игрока (карта одна для всех участников)
+    $first_player = reset($battle_data['players']);
+    $room_id = $first_player['ROOM_ID'] ?? '';
+    if ($room_id === '') {
+        jsonError('В battledata.json у игроков отсутствует ROOM_ID');
     }
-    
-    $room_json = file_get_contents($room_file);
-    $room_data = json_decode($room_json, true);
+
+    $room_file = $room_id . '.json';
+    $room_path = __DIR__ . '/../data/' . $room_file;
+
+    if (!file_exists($room_path)) {
+        jsonError('Файл комнаты не найден: ' . $room_path);
+    }
+
+    $room_content = file_get_contents($room_path);
+    if ($room_content === false) {
+        jsonError('Не удалось прочитать файл комнаты: ' . $room_path);
+    }
+
+    $room_data = json_decode($room_content, true);
     if (!$room_data) {
-        throw new Exception('Ошибка парсинга B1.json: ' . json_last_error_msg());
+        jsonError('Ошибка парсинга JSON комнаты: ' . $room_file);
     }
-    
-    // Инициализируем состояние
+
+    // Опциональный файл сдавшихся бойцов (перезапуск после поражения)
+    $surrendered_path = __DIR__ . '/../data/SURRENDERED.json';
+    $surrendered = [];
+    if (file_exists($surrendered_path)) {
+        $surrendered_content = file_get_contents($surrendered_path);
+        $decoded = json_decode((string)$surrendered_content, true);
+        if (is_array($decoded)) {
+            $surrendered = $decoded;
+        }
+    }
+
+    // Игроки: ключ массива = nickname (его шлёт клиент в action.php как player_id)
+    $players = [];
+    foreach ($battle_data['players'] as $nickname => $pdata) {
+        $pos = $pdata['CUR_POSITION_XY'] ?? ($pdata['START_POSITION_XY'] ?? '0,0');
+        $players[$nickname] = array_merge([
+            'ID' => $nickname,
+            'CUR_POSITION_XY' => $pos,
+            'START_POSITION_XY' => $pos,
+            'END_POSITION_XY' => $pos,
+            'TURN' => 'RIGHT',
+            'STATUS' => 'IDLE',
+            'LIFE' => 3,
+            'MAX_HITPOINTS' => 10,
+            'HITPOINTS' => 10,
+            'MAX_SHIELD' => 0,
+            'SHIELD' => 0,
+            'ATTACK' => 2,
+            'DEFENCE' => 1,
+            'RESISTANCE' => 0,
+            'RANGE' => 3,
+            'ABILITIES' => [],
+            'PASSIVES' => [],
+            'NEGATIVES' => [],
+            'ALLY' => 'NONE',
+            'ACTIONS' => 2,
+            'MAX_ACTIONS' => 2,
+            'MOVE_START_TIME' => microtime(true),
+            'MOVE_END_TIME' => microtime(true),
+        ], $pdata);
+        $players[$nickname]['ID'] = $nickname;
+
+        // Если боец сдавился в прошлом бою — стартуем с его сохранённым состоянием
+        if (isset($surrendered[$nickname])) {
+            $players[$nickname] = array_merge($players[$nickname], $surrendered[$nickname]);
+        }
+    }
+
+    // Объекты / ловушки / NPC — прямо из секций battledata.json (канонический формат)
+    $objects = [];
+    foreach (($battle_data['objects'] ?? []) as $obj_id => $odata) {
+        $objects[$obj_id] = array_merge([
+            'ID' => $obj_id,
+            'IMAGE' => '',
+            'POSITION_XY' => '0,0',
+            'STATUS' => 'INTACT',
+            'HITPOINTS' => 1,
+            'ALLY' => 'NONE',
+        ], $odata);
+        $objects[$obj_id]['ID'] = $obj_id;
+    }
+
+    $traps = [];
+    foreach (($battle_data['traps'] ?? []) as $trap_id => $tdata) {
+        $effect = $tdata['EFFECT'] ?? [];
+        if (is_string($effect)) {
+            $effect = [$effect];
+        }
+        $traps[$trap_id] = array_merge([
+            'ID' => $trap_id,
+            'IMAGE' => '',
+            'POSITION_XY' => '0,0',
+            'STATUS' => 'INTACT',
+            'DAMAGE' => 1,
+            'RANGE' => 1,
+            'EFFECT' => $effect,
+            'HITPOINTS' => 1,
+            'ALLY' => 'NONE',
+        ], $tdata);
+        $traps[$trap_id]['ID'] = $trap_id;
+        $traps[$trap_id]['EFFECT'] = $effect;
+    }
+
+    $npcs = [];
+    foreach (($battle_data['npcs'] ?? []) as $npc_id => $ndata) {
+        $npcs[$npc_id] = array_merge([
+            'ID' => $npc_id,
+            'IMAGE' => '',
+            'POSITION_XY' => '0,0',
+            'STATUS' => 'IDLE',
+            'HITPOINTS' => 5,
+            'MAX_HITPOINTS' => 5,
+            'ATTACK' => 2,
+            'RANGE' => 4,
+            'CUR_TARGET' => 'NONE',
+            'ALLY' => 'NONE',
+            'ACTIONS' => 1,
+            'MAX_ACTIONS' => 1,
+        ], $ndata);
+        $npcs[$npc_id]['ID'] = $npc_id;
+    }
+
     $state = [
-        'players' => $battle_data['players'] ?? [],
-        'objects' => $battle_data['objects'] ?? [],
-        'traps' => $battle_data['traps'] ?? [],
-        'npcs' => $battle_data['npcs'] ?? [],
         'room' => $room_data,
-        'turn_time' => time(),
+        'objects' => $objects,
+        'traps' => $traps,
+        'npcs' => $npcs,
+        'players' => $players,
         'projectiles' => [],
-        'version' => 1,
-        'log' => [[
-            'time' => time(),
-            'message' => 'Бой инициализирован. Игроков: ' . count($battle_data['players'])
-        ]]
+        'log' => [],
+        'turn_time' => time(),
     ];
-    
-    // battle.php подключает abilities.php, items.php и objects.php
-    // (нужен calculateThreatZone из objects.php для зон угрозы NPC)
-    require_once __DIR__ . '/battle.php';
-    
-    // Вычисляем зоны угрозы для всех NPC
+
+    // Зоны угрозы NPC (нужны предсказанию движения)
     foreach ($state['npcs'] as $npc_id => &$npc) {
         if ($npc['STATUS'] !== 'DESTROYED' && $npc['STATUS'] !== 'DEATH') {
             $npc['THREAT_ZONE'] = calculateThreatZone($state, $npc_id);
-            $state = addLog($state, "NPC {$npc_id}: зона угрозы вычислена (" . count($npc['THREAT_ZONE']) . " клеток)");
+            $state = world_log($state, "NPC {$npc_id}: зона угрозы вычислена (" . count($npc['THREAT_ZONE']) . " клеток)");
         }
     }
-    
-    // Сохраняем в Redis
-    saveBattleState($state);
-    
-    // Выводим результат
+    unset($npc);
+
+    // Единая точка записи мира (flushDB + save + версия)
+    world_init($state);
+
+    closeRedis();
+
+    ob_end_clean();
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'success' => true,
         'message' => 'Бой инициализирован',
-        'players' => array_keys($state['players']),
-        'room' => $room_data['room_id']
+        'room' => $room_id,
+        'rules' => rules_client_payload(),
+        'abilities' => getAbilityDefinitions(),
+        'autonomous_objects' => getAutonomousObjectDefinitions(),
+        'passives' => getPassiveDefinitions(),
+        'effects' => getEffectDefinitions(),
     ], JSON_UNESCAPED_UNICODE);
-    
-} catch (Exception $e) {
-    // Очищаем буфер
-    ob_clean();
-    
-    // Выводим ошибку
-    http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Ошибка: ' . $e->getMessage(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine()
-    ], JSON_UNESCAPED_UNICODE);
+    exit;
+
 } catch (Throwable $e) {
-    // Очищаем буфер
-    ob_clean();
-    
-    // Выводим ошибку
-    http_response_code(500);
+    ob_end_clean();
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'success' => false,
-        'message' => 'Критическая ошибка: ' . $e->getMessage(),
+        'message' => 'Критическая ошибка инициализации: ' . $e->getMessage(),
         'file' => $e->getFile(),
-        'line' => $e->getLine()
+        'line' => $e->getLine(),
     ], JSON_UNESCAPED_UNICODE);
+    exit;
 }

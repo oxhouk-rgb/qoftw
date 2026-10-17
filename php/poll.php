@@ -1,137 +1,112 @@
 <?php
 /**
- * poll.php - Long Polling endpoint
- * 
- * Клиент делает запрос и ждет появления новых данных.
- * Сервер держит соединение открытым до:
- * - Появления новой версии состояния
- * - Истечения таймаута (LONG_POLL_TIMEOUT секунд)
+ * poll.php — Long polling (тонкий слой).
+ *
+ * Цикл: turn_tick (движение/анимации) → turn_check_advance (ход раз в TURN_DURATION сек)
+ * → сравнение версии. Если версия не изменилась и клиентский version ==
+ * серверный — держим соединение до LONG_POLL_TIMEOUT; при изменении версии
+ * отдаём мгновенно. Сохранение только через world_save().
+ *
+ * Контракт ответа (плоский, без обёртки 'data' — сверено с js/game.js):
+ *   version, room, grid?, objects, traps, npcs, players, projectiles, log,
+ *   turn_time, turn_duration, time_to_next_turn, victory, rules
  */
 
-// Буферизация вывода
-ob_start();
-
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/battle.php';
-// items.php и objects.php уже подключены через battle.php
+require_once __DIR__ . '/engine/bootstrap.php';
 
 setCorsHeaders();
 
-// Получаем последнюю известную версию от клиента
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
 $client_version = isset($_GET['v']) ? (int)$_GET['v'] : 0;
-$player_id = isset($_GET['player']) ? $_GET['player'] : null;
+$player_id = $_GET['player'] ?? null;
 
-// Устанавливаем таймаут выполнения
-set_time_limit(LONG_POLL_TIMEOUT + 5);
+// Длинное соединение: снимаем лимит выполнения скрипта (как в старом poll.php),
+// иначе настенд с дефолтным max_execution_time=30 убьёт long-poll цикл.
+set_time_limit(LONG_POLL_TIMEOUT + 10);
 
-try {
+    $timeout = LONG_POLL_TIMEOUT; // сек
     $start_time = time();
-    
-while (true) {
+
     try {
-        // Получаем Redis подключение
-        $redis = getRedis();
-        
-        // Получаем текущее состояние
-        $state = getBattleState();
-        
-        // Проверяем нужно ли обновить ход (каждые TURN_DURATION секунд)
-        $now = time();
-        if ($now - $state['turn_time'] >= TURN_DURATION) {
-            // Новый ход!
-            $state['turn_time'] = $now;
-            
-            // Обрабатываем начало хода (регенерация, негативные эффекты, восстановление очков)
-            processTurnStart($state);
-            
-            // Обрабатываем NPC
-            processNPCs($state);
-            
-            // Сохраняем
-            saveBattleState($state);
-            
-            // Увеличиваем версию чтобы клиенты получили обновление
-            $redis->incr(REDIS_VERSION);
-        }
-        
-        // Обновляем перемещения и анимации
-        updateMovements($state);
-        updateDeathAnimations($state);
-        updateProjectiles($state);
-        resetAttackStatus($state);
-        $npcs_before = json_encode($state['npcs']);
-        updateNpcStatuses($state);
-        // Если NPC сменил статус (ATTACK -> IDLE) - бум версии,
-        // чтобы клиенты получили обновление анимации сразу, не дожидаясь хода
-        if (json_encode($state['npcs']) !== $npcs_before) {
-            $redis->incr(REDIS_VERSION);
-        }
-        saveBattleState($state);
-        
-        // Проверяем появилась ли новая версия
-        $current_version = (int)$redis->get(REDIS_VERSION);
-        
-        if ($current_version > $client_version) {
-            // Есть новые данные - отправляем клиенту
-            $response = [
-                'version' => $current_version,
-                'turn_time' => $state['turn_time'],
-                'turn_duration' => TURN_DURATION,
-                'time_to_next_turn' => max(0, TURN_DURATION - ($now - $state['turn_time'])),
-                'players' => $state['players'],
-                'objects' => $state['objects'],
-                'traps' => $state['traps'],
-                'npcs' => $state['npcs'],
-                'room' => $state['room'],
-                'projectiles' => $state['projectiles'],
-                'log' => array_slice($state['log'], -10),
-                'victory' => checkVictory($state)
-            ];
-            
-            // Закрываем Redis соединение перед отправкой
+        while (true) {
+            $state = world_load();
+
+            // ★ turn_time = серверный дедлайн хода. Если init.php/предыдущий
+            // процесс его не задал (0) — фиксируем сейчас и сохраняем ОДИН раз,
+            // иначе build_poll_response будет отдавать TURN_DURATION вместо
+            // обратного отсчёта, а turn_check_advance на первой же проверке
+            // устроит шторм версий «ход каждый тик» (баг залипшего таймера).
+            if (!isset($state['turn_time']) || (int)$state['turn_time'] <= 0) {
+                $state['turn_time'] = time();
+                world_save($state);
+            }
+
+            // Серверный тик движка (включая ход мира turn_check_advance — он
+            // внутри turn_tick; повторный вызов отсюда устроил бы двойной
+            // advance при редких опросах).
+            // ★ ВАЖНО: тик выполняется для ЛЮБОГО poll-клиента, даже если он
+            // не передал ?player= или передал неизвестный id. Мир — общий:
+            // эффекты (STUNNED/BLEED), движение, смерть и таймер хода обязаны
+            // тикать независимо от роли читателя (иначе оглушение «висит
+            // вечно», пока игрок не откроет свой клиент заново).
+            $changed_by_tick = turn_tick($state);
+            if ($changed_by_tick) {
+                world_save($state);
+            }
+
+        $server_version = world_version();
+
+        if ($server_version !== $client_version) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(build_poll_response($state, $server_version), JSON_UNESCAPED_UNICODE);
             closeRedis();
-            
-            jsonResponse($response);
+            exit;
         }
-        
-        // Закрываем Redis соединение чтобы освободить его для других запросов
-        closeRedis();
-        
-        // Проверяем таймаут
-        if (time() - $start_time >= LONG_POLL_TIMEOUT) {
-            // Таймаут - отправляем текущее состояние (возможно без изменений)
-            $redis = getRedis();
-            $current_version = (int)$redis->get(REDIS_VERSION);
-            
-            $response = [
-                'version' => $current_version,
-                'turn_time' => $state['turn_time'],
-                'turn_duration' => TURN_DURATION,
-                'time_to_next_turn' => max(0, TURN_DURATION - ($now - $state['turn_time'])),
-                'players' => $state['players'],
-                'objects' => $state['objects'],
-                'traps' => $state['traps'],
-                'npcs' => $state['npcs'],
-                'room' => $state['room'],
-                'projectiles' => $state['projectiles'],
-                'log' => array_slice($state['log'], -10),
-                'victory' => checkVictory($state),
-                'timeout' => true
-            ];
-            
+
+        if (time() - $start_time >= $timeout) {
+            // Таймаут long-poll: отдаём текущий снимок с timeout=true (как в старом контракте),
+            // чтобы клиент обновил таймер хода даже при отсутствии событий.
+            header('Content-Type: application/json; charset=utf-8');
+            $resp = build_poll_response($state, $server_version);
+            $resp['timeout'] = true;
+            echo json_encode($resp, JSON_UNESCAPED_UNICODE);
             closeRedis();
-            jsonResponse($response);
+            exit;
         }
-        
-        // Ждем немного перед следующей проверкой
-        usleep(500000); // 0.5 секунды
-        
-    } catch (Exception $e) {
-        // При ошибке закрываем соединение и пробуем снова
-        closeRedis();
-        usleep(500000); // 0.5 секунды
+
+        usleep(100000); // 100ms
     }
-}    
 } catch (Exception $e) {
-    jsonError('Poll ошибка: ' . $e->getMessage());
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => 'Ошибка polling', 'message' => $e->getMessage()]);
+    closeRedis();
+    exit;
+}
+
+/**
+ * Сборка flat-ответа poll (контракт клиента js/game.js render(data)).
+ */
+function build_poll_response($state, $version) {
+    $now = time();
+    return [
+        'version' => $version,
+        'rules' => rules_client_payload(),
+        'room' => $state['room'],
+        'grid' => $state['room']['grid'],
+        'objects' => $state['objects'],
+        'traps' => $state['traps'],
+        'npcs' => $state['npcs'],
+        'players' => $state['players'],
+        'projectiles' => $state['projectiles'] ?? [],
+        'log' => array_slice($state['log'], -30),
+        'turn_time' => $state['turn_time'],
+        'turn_duration' => TURN_DURATION,
+        'time_to_next_turn' => max(0, TURN_DURATION - ($now - (int)$state['turn_time'])),
+        'victory' => engine_check_victory($state),
+    ];
 }
