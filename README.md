@@ -33,15 +33,14 @@ redis-server
 │   ├── battledata.json
 │   └── B1.json
 └── php/
-    ├── config.php
-    ├── init.php
-    ├── poll.php
-    ├── action.php
-    ├── battle.php
-    ├── abilities.php
-    ├── items.php
-    ├── objects.php
-    └── debug.php
+    ├── config.php            ← Redis-коннект, JSON-хелперы, лог
+    ├── init.php              ← эндпоинт инициализации боя
+    ├── poll.php              ← long polling + серверный тик
+    ├── action.php            ← POST-обработчик действий
+    ├── battle.php            ← фасад обратной совместимости
+    ├── debug.php             ← диагностика движка
+    ├── engine/               ← ядро: rules, geometry, events (шина), world (Redis), turn, bootstrap
+    └── systems/              ← механики: effects, combat, movement, passives, targeting, abilities, objects
 ```
 
 3. **Откройте в браузере:**
@@ -70,17 +69,31 @@ define('REDIS_DB', 0);
 
 ### PHP файлы (`php/`)
 
+Архитектура двухслойная: тонкие HTTP-эндпоинты → движок `engine/` (ядро) + `systems/` (механики),
+связанные событийной шиной. Подробно — в `ARCH.md`.
+
 | Файл | Назначение |
 |------|-----------|
-| `config.php` | Подключение Redis, константы игры (GRID 16×12, MOVE_SPEED, TURN_DURATION и др.), ключи `battle:*`, чтение/запись состояния, лог, JSON-ответы |
-| `init.php` | Сброс Redis (flushDB) и загрузка `data/battledata.json` + `data/B1.json` в состояние боя |
-| `poll.php` | Long polling endpoint + серверный тик (обновление движений, снарядов, хода, NPC, анимаций смерти) |
-| `action.php` | POST-обработчик действий: `move` / `attack` / `ability` |
-| `battle.php` | Перемещения (плавные, с проверкой стен/игроков), атаки, тики, ловушки при движении, смерть/возрождение, снаряды, проверка победы |
-| `abilities.php` | Реестр способностей и их применение (instant/beam/line/area), расчёт урона, негативные эффекты, AoE-мишени |
-| `items.php` | Только пассивные способности игроков: реестр пассивок, начало хода (реген/щиты/негативы), splash/thorns/puncture, оркестрация вызова зон угрозы |
-| `objects.php` | Автономные объекты боя: NPC (зоны угрозы, линия видимости, ИИ-атака при пересечении) и ловушки (срабатывание по ALLY, эффекты/урон); задел на объекты, создаваемые способностями |
-| `debug.php` | Отладочная страница: проверка PHP, расширения Redis и соединения |
+| `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, лог. Игровые константы перенесены в `engine/rules.php` |
+| `init.php` | Сброс Redis (flushDB) и загрузка `data/battledata.json` + `data/B1.json` в состояние боя (`world_init`); отдаёт клиенту реестры и серверные правила (`rules`) |
+| `poll.php` | Long polling endpoint + серверный тик (`turn_tick`: движения, снаряды, ход, NPC, анимации смерти, тик эффектов) |
+| `action.php` | POST-обработчик действий: `move` / `attack` / `ability` (валидация живости/CC/AP → роутинг в системы; ошибки — JSON 400) |
+| `battle.php` | Фасад обратной совместимости: legacy-имена функций (`processMove`, `checkVictory`, …) как делегаты в engine/systems. Новый код здесь не пишется |
+| `engine/rules.php` | Единый источник констант мира (GRID 16×12, MOVE_SPEED, TURN_DURATION, SHIELD_REGEN_PER_TURN и др.) + формула TURN + payload правил для клиента |
+| `engine/geometry.php` | Чистые функции координат: parseXY/formatXY/manhattan/calculatePath и т.п. |
+| `engine/events.php` | Событийная шина: `hook()/emit()/emitReduce()` (query-события с мутацией по ссылке) |
+| `engine/world.php` | Единственный владелец хранилища Redis (`battle:*`): world_load/save/init/log/version; инкремент версии централизован |
+| `engine/turn.php` | Оркестратор тика хода: движение → смерть → снаряды → NPC → тик эффектов; новый ход каждые TURN_DURATION сек |
+| `engine/bootstrap.php` | Точка сборки: подключение систем + регистрация слушателей шины в фиксированном порядке |
+| `systems/effects.php` | Реестр статус-эффектов (STUNNED, BLEED, FROZEN…): длительность `[N]` ходов, DoT, CC-блокировки |
+| `systems/combat.php` | Единая цепочка урона: сопротивление/пробитие → щит → HP → смерть; атаки игроков |
+| `systems/movement.php` | Движение: предсказание на копии vs серверное применение, модификаторы дальности/блокировки |
+| `systems/passives.php` | Реестр пассивок как слушатели шины (REGENERATION, ARMORED, ARMOR_CRUSH, SPLASH, THORNS, SWIFT/SLOWED, PUNCTURE) |
+| `systems/targeting.php` | Универсальный доступ к сущностям и выбор целей (AoE бьёт игроков, NPC, объекты) |
+| `systems/abilities.php` | Реестр способностей и их применение (instant/beam/line/area) через сервисы combat/effects |
+| `systems/objects.php` | Автономные объекты: NPC (зоны угрозы, LOS, ИИ-атака раз в ход, не стреляет по мёртвым) и ловушки (срабатывание по ALLY) |
+| `debug.php` | Отладочная страница: PHP, Redis, наличие/загрузка модулей движка, реестры, тест цикла (⚠️ делает flushDB) |
+| `*.php.old` | Legacy-копии abilities/items/objects до рефакторинга — reference, в графе загрузки не участвуют |
 
 ### Фронтенд
 
@@ -163,11 +176,14 @@ define('REDIS_DB', 0);
 | Название | Эффект |
 |----------|--------|
 | REGENERATION | +1 HP/ход |
-| ARMORED | -1 к полученному урону |
+| ARMORED | снижает входящий урон вдвое, но только от атакующих с ARMOR_CRUSH (на обычные атаки и NPC не действует) |
+| ARMOR_CRUSH | атаки носителя игнорируют всё сопротивление цели (RESISTANCE и ARMORED); не работает, если у носителя есть ARMORED (взаимоисключающая синергия) |
 | SPLASH | 1 урон соседним врагам при атаке |
 | THORNS | 1 урон атакующему при получении урона |
 | SWIFT | +1 к дальности перемещения |
 | PUNCTURE | атака пробивает всех врагов на пути до цели |
+
+NPC-урон (турель/мина) идёт по единой цепочке без сопротивления цели — одинаковый по всем целям.
 
 ### Негативные эффекты
 | Эффект | Действие |
@@ -195,13 +211,13 @@ define('REDIS_DB', 0);
 ### PLAYER2 - FROST KNIGHT 🔵
 - HP: 8 | ATK: 4 | RES: 5 | Shield: 3 | Actions: 3 | Range: 3
 - Способности: Ice Shard[3], Frost Nova[2], Blizzard[5]
-- Пассивки: Armored, Splash, Puncture
+- Пассивки: Armored, Splash, Puncture, Armor Crush (тестовая связка: ARMORED глушит собственный ARMOR_CRUSH — обе способности на этом персонаже попарно неактивны)
 - Союзник: PLAYER1
 
 ### PLAYER3 - SHADOW ROGUE 🟢
 - HP: 6 | ATK: 7 | RES: 2 | Shield: 0 | Actions: 3 | Range: 2
 - Способности: Backstab[1], Smoke Bomb[3], Poison Blade[2]
-- Пассивки: Splash
+- Пассивки: Splash, Armor Crush (чистый носитель ARMOR_CRUSH — его атаки игнорируют сопротивление и ARMORED целей)
 - Союзник: нет (FREE FOR ALL)
 
 ### PLAYER4 - IRON GUARD 🟡
@@ -215,26 +231,34 @@ define('REDIS_DB', 0);
 ## Расширение
 
 ### Добавить способность
-1. Добавьте определение в `abilities.php` → `getAbilityDefinitions()`
+1. Добавьте определение в `systems/abilities.php` → `getAbilityDefinitions()`
 2. Добавьте в ABILITIES игрока в `battledata.json`
+3. Урон/эффекты — только через сервисы `combat_apply_damage()` / `effects_apply()`
+
+### Добавить статус-эффект (DOT/CC)
+1. Только реестр в `systems/effects.php` (kind: dot/cc/modifier, длительность, модификаторы)
+2. Блокировки действий берутся автоматически через `effects_blocks()`, тик — через `effects_tick()`
 
 ### Добавить пассивку
-1. Добавьте определение в `items.php` → `getPassiveDefinitions()`
-2. Добавьте обработку в `processTurnStart()` или `applyPassiveDefense()`
+1. Добавьте определение в `systems/passives.php` → `getPassiveDefinitions()`
+2. Добавьте слушатель шины в `passives_register_hooks()`: `turn.start` (реген-подобные),
+   `damage.query_mitigate` (защитные), `damage.dealt` (откормка), `attack.resolved` (сплэш),
+   `movement.query_distance` (модификаторы движения)
 3. Добавьте в PASSIVES игрока в `battledata.json`
 
 ### Добавить комнату
 1. Создайте `data/ROOM_ID.json` по аналогии с `B1.json`
 2. Добавьте выход в `exits` текущей комнаты
-3. Добавьте обработку перехода в `battle.php` → `updateMovements()`
+3. Добавьте обработку перехода в `systems/movement.php` → `updateMovements()`
 
 ### Добавить NPC
 1. Добавьте в `npcs` в `battledata.json`
-2. AI и зоны угрозы обрабатываются в `objects.php` → `processNPCs()` / `checkThreatZoneIntersection()`
+2. AI и зоны угрозы обрабатываются в `systems/objects.php` (слушатель `turn.start`,
+   `calculateThreatZone` / пересечение зон при движении)
 
 ### Добавить автономный объект (ловушку/будущий spawn-объект от способности)
-1. Логика всех автономных объектов — только в `objects.php` (в `items.php` её быть не должно)
-2. Добавьте тип объекта в `getAutonomousObjectDefinitions()` (`objects.php`)
+1. Логика всех автономных объектов — только в `systems/objects.php`
+2. Добавьте тип объекта в `getAutonomousObjectDefinitions()` (`systems/objects.php`)
 3. Не забудьте поле `ALLY`: игрок-создатель и его союзник не должны восприниматься объектом как враги
 
 ## API и синхронизация (Long Polling)
@@ -255,17 +279,24 @@ define('REDIS_DB', 0);
 - Истечения таймаута (`LONG_POLL_TIMEOUT` = 25 секунд)
 
 Каждый цикл poll на сервере выполняет тик:
-1. Если прошло `TURN_DURATION` (5) сек — новый ход: `processTurnStart()` (регенерация, негативные эффекты, восстановление ACTIONS) → `processNPCs()`, версия инкрементируется;
-2. Ежецикловое обновление: `updateMovements()` → `updateDeathAnimations()` → `updateProjectiles()` → `resetAttackStatus()`;
-3. Если версия выросла — полное состояние отправляется клиенту.
+1. `turn_tick($state)` выполняется для **любого** запроса (даже без `player`): движение по
+   серверным часам → анимации смерти → снаряды → сброс ATTACK у NPC → тик статус-эффектов
+   (длящиеся `[N]` ходов реально снимаются);
+2. Если прошло `TURN_DURATION` (5) сек — новый ход: `turn_start()` + событие `turn.start`
+   (слушатели: реген щита/HP, негативы/DoT, восстановление ACTIONS игроков и NPC, зоны угрозы),
+   версия инкрементируется;
+3. Если версия выросла — полное состояние отправляется клиенту (flat JSON, без обёртки `data`).
 
-Все состояние лежит в Redis под префиксом `battle:` (players, objects, traps, npcs, room, turn_time, projectiles, version, log).
+Все состояние лежит в Redis под префиксом `battle:` (players, objects, traps, npcs, room, turn_time, projectiles, version, log). Доступ к хранилищу — только через `engine/world.php` (`world_save()` сам инкрементирует версию).
 
 ## Статус проекта / план развития
 
-Реализовано: боевая система на сетке с полным циклом (ход, движение, атаки, способности, эффекты, пассивки, ловушки, NPC), мультиплеер через long polling, клиентская отрисовка и анимации.
+Реализовано: боевая система на сетке с полным циклом (ход, движение, атаки, способности, эффекты, пассивки, ловушки, NPC), мультиплеер через long polling, клиентская отрисовка и анимации. Движок переведён на двухслойную архитектуру `engine/ + systems/` с событийной шиной (рефакторинг по `REFACTOR_PROPOSAL.md` выполнен; описание — в `ARCH.md`).
 
 TODO / не реализовано (в т.ч. изначальные фичи концепта):
+- Смоук-тест `tests/smoke.php` (Шаг 0 плана рефакторинга) — проверки на стенде с Redis пока нет
+- Миграция клиента (`js/game.js`) на серверные правила из поля `rules` ответов init/poll
+- Переезд эндпоинтов в `php/public/` (отложен, чтобы не ломать клиентский PHP_URL)
 - Переход между комнатами по выходам/лестницам — сейчас только логируется (заглушка в `updateMovements()`); «три этажа с лестницами» из концепта существуют лишь как карта B1 + записи `exits`/`stairs` в ней
 - Комнаты A1/C1 и SPAWN-зона — карты отсутствуют в `data/`
 - Объекты взаимодействия (KEY_TERMINAL и т.п.) — тип `objects` есть, но интерактивных объектов в данных нет
