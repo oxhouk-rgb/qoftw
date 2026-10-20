@@ -27,10 +27,13 @@ require_once __DIR__ . '/movement.php';
 
 /**
  * Формула урона: base (мин 1), сопротивление −10%/очко (кэп 90%), ceil, мин 1.
+ * $pierce=true — игнорировать сопротивление цели (атака игрока с ARMOR CRUSH;
+ * см. combat_should_pierce_resistance в systems/passives.php).
  * КЛИЕНТ повторять не обязан — расчёт только серверный.
  */
-function calculateDamage($base_damage, $attack_stat, $resistance) {
+function calculateDamage($base_damage, $attack_stat, $resistance, $pierce = false) {
     $damage = max($base_damage, 1);
+    if ($pierce) return $damage; // ARMOR CRUSH: всё сопротивление проигнорировано
     $resist_percent = min($resistance * RESISTANCE_PERCENT_PER_POINT, RESISTANCE_CAP_PERCENT);
     $reduced = $damage * (1 - $resist_percent / 100);
     return max(ceil($reduced), 1);
@@ -51,6 +54,7 @@ function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source
         'target_type' => $target_type,
         'target_id' => $target_id,
         'damage' => $damage,
+        'source' => $source, // контекст атакующего (нужен ARMORED vs ARMOR CRUSH)
     ]);
     $damage = max(0, $query['damage']);
     if ($damage === 0) {
@@ -129,14 +133,18 @@ function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source
     return ['dealt' => $damage, 'shield_absorbed' => $shield_absorbed, 'killed' => $killed];
 }
 
-/**
- * Слушатель 'damage.dealt': у игрока-жертвы прерываем движение на текущей
+/** Слушатель 'damage.dealt': у игрока-жертвы прерываем движение на текущей
  * (округлённой по серверным часам) клетке. Раньше это было встроено в оба
  * клона applyDamageToTarget; теперь — один listener.
+ *
+ * ★ Урон по ЩИТУ не прерывает движение: исторический updateMovements останавливал
+ * спрайт только при damage > 0 (прошедшем сквозь щит). Иначе турель с малым
+ * уроном «замораживала» идущего игрока на каждом шаге, а реген щита делал её
+ * безобидной — ровно тот шторм ATTACK-анимаций и «вечный stun», что были в баг-репорте.
  */
 function combat_on_damage_dealt(&$state, $payload) {
     if ($payload['target_type'] !== 'player') return;
-    if ($payload['damage'] <= 0 && $payload['shield_absorbed'] <= 0) return;
+    if ($payload['damage'] <= 0) return; // щит поглотил всё — движение продолжается
     $player = $state['players'][$payload['target_id']] ?? null;
     if (!$player) return;
     if ($player['STATUS'] === 'MOVING') {
@@ -249,7 +257,8 @@ function combat_process_attack(&$state, $attacker_id, $target_x, $target_y) {
         $target = $hit['target'];
         $hit_cells[] = [$hit['x'], $hit['y']];
 
-        $damage = calculateDamage($attacker['ATTACK'], $attacker['ATTACK'], $target['resistance']);
+        $damage = calculateDamage($attacker['ATTACK'], $attacker['ATTACK'], $target['resistance'],
+                                  combat_should_pierce_resistance($state, ['type' => 'player', 'id' => $attacker_id]));
 
         $res = combat_apply_damage($state, $target['type'], $target['id'], $damage,
                                    ['type' => 'player', 'id' => $attacker_id]);

@@ -27,12 +27,17 @@ function turn_start(&$state) {
     foreach ($state['players'] as $pid => &$player) {
         if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) continue;
 
-        // Восстановление очков действий
+        // Восстановление очков действий.
+        // ★ CC-носители (STUNNED и т.п.) получают actions в 0 — их обнулит
+        // effects_tick ниже; всем остальным полный пул.
         $player['ACTIONS'] = $player['MAX_ACTIONS'];
 
-        // Регенерация щита (1 за ход)
+        // Регенерация щита (SHIELD_REGEN_PER_TURN за ход — см. engine/rules.php).
+        // Мёртвые/разлагающиеся пропускаются выше; движущиеся НЕ пропускаются:
+        // реген щита на них не влияет, а вот проверка зон угрозы в turn.start
+        // обязана их увидеть (см. objects_on_turn_start).
         if ($player['SHIELD'] < $player['MAX_SHIELD']) {
-            $player['SHIELD'] = min($player['SHIELD'] + 1, $player['MAX_SHIELD']);
+            $player['SHIELD'] = min($player['SHIELD'] + SHIELD_REGEN_PER_TURN, $player['MAX_SHIELD']);
         }
 
         // Снятие залипшего статуса STUNNED (если эффект ещё активен,
@@ -50,6 +55,11 @@ function turn_start(&$state) {
  * Слушатель turn.start (priority 5): прогон эффектов всех живых игроков.
  * Зарегистрирован здесь, а не в effects.php — чтобы не тянуть обратную
  * зависимость effects→combat (effects_tick вызывает combat_apply_damage).
+ *
+ * ★ MOVING тоже получает тик: эффект может истечь/нанести DoT ровно тогда,
+ * когда спрайт едет; movement_update_step ниже по часам корректно восстановит
+ * STUNNED из ещё активных NEGATIVES на финале движения (историческое
+ * поведение updateMovements сохранено).
  */
 function turn_effects_tick(&$state, $payload) {
     foreach ($state['players'] as $pid => $player) {
@@ -120,27 +130,44 @@ function turn_tick(&$state) {
     //    могла измениться относительно $after — пересчитываем флаг.
     if (turn_check_advance($state)) {
         $changed = true;
-    } elseif (json_encode($state['players']) !== json_decode($after, true)[0]) {
-        $changed = true;
     }
 
-    // 3) Самовосстановление инварианта «STATUS ↔ NEGATIVES» (защита от
-    //    исторических залипаний и будущих регрессий): если cc-эффект активен,
-    //    но STATUS не выставлен (и состояние не анимационное) — починить;
-    //    если STATUS='STUNNED', а эффекта нет — снять.
+    // 3) ★ Инвариант «STATUS ↔ NEGATIVES» — ЕДИНАЯ точка синхронизации на
+    //    каждом тике. Если cc-эффект активен, но STATUS не выставлен (и
+    //    состояние не анимационное) — починить; если STATUS='STUNNED', а
+    //    cc-эффектов нет — снять.
+    //    Раньше здесь был симметричный «починитель», который ВЫСТАВЛЯЛ
+    //    STUNNED/ACTIONS=0 игрокам в MOVING/ATTACK/ABILITY: любое попадание
+    //    под турель с STUNNED[2] от мины превращало короткую анимацию удара
+    //    в вечный оглуш (ATTACK→STUNNED и блокировка всех действий навсегда).
+    //    Анимационные состояния теперь только ОСВОБОждаются из залипшего
+    //    STUNNED, но никогда не перехватываются шиной — движение доезжает,
+    //    удар досвечивается, статус выставит movement-finish/effects_tick.
     foreach ($state['players'] as $pid => &$p) {
-        if (in_array($p['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY'], true)) continue;
+        if (in_array($p['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY'], true)) {
+            continue;
+        }
         $cc = effects_blocks($p, 'actions');
-        if ($cc['blocked'] && $p['STATUS'] !== 'STUNNED') {
-            $p['STATUS'] = 'STUNNED';
-            $p['ACTIONS'] = 0;
-            $changed = true;
-        } elseif (!$cc['blocked'] && $p['STATUS'] === 'STUNNED') {
-            $p['STATUS'] = 'IDLE';
+        if ($cc['blocked']) {
+            if ($p['STATUS'] !== 'STUNNED') {
+                $cp = effects_parse($cc['reason']);
+                $defs = getEffectDefinitions();
+                $sets = ($cp && isset($defs[$cp['name']]['sets_status'])) ? $defs[$cp['name']]['sets_status'] : 'STUNNED';
+                $p['STATUS'] = $sets;
+                $p['ACTIONS'] = 0;
+                $changed = true;
+            }
+        } elseif ($p['STATUS'] === 'STUNNED') {
+            $p['STATUS'] = 'IDLE'; // эффект истёк/снят — освобождаем мгновенно
             $changed = true;
         }
     }
     unset($p);
+
+    // 4) Пересчёт зон угрозы NPC ПОСЛЕ фазы движения: спрайт мог сойти с
+    //    клетки LOS или зайти за бочку — устаревший THREAT_ZONE «стрелял» бы
+    //    по мёртвому/пустой клетке либо не попал бы по живому.
+    objects_refresh_threat_zones($state);
 
     return $changed;
 }

@@ -42,6 +42,12 @@ $rules_define('PROJECTILE_HIT_SECONDS', 2);   // hit -> done
 $rules_define('RESISTANCE_PERCENT_PER_POINT', 10);
 $rules_define('RESISTANCE_CAP_PERCENT', 90);
 
+// Базовое правило мира: 1 ед. щита за ход. Исторически «непробиваемый щит»
+// у PLAYER2/PLAYER4 под огнём турели был следствием пассивки ARMORED, а не
+// этого значения; после переработки ARMORED/ARMOR CRUSH (см. systems/passives.php)
+// реген остаётся 1.
+$rules_define('SHIELD_REGEN_PER_TURN', 1);
+
 unset($rules_define);
 
 /**

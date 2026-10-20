@@ -10,6 +10,9 @@
  * Типы поведения (поле 'hook'/'query' в реестре):
  *   on_turn_start  → слушатель turn.start        (REGENERATION)
  *   damage_reduce  → слушатель damage.query_mitigate (ARMORED, by-ref!)
+ *   resist_pierce  → query «стиля атаки» (ARMOR CRUSH; читается боевыми
+ *                    системами напрямую через combat_should_pierce_resistance —
+ *                    как PUNCTURE: это вопрос «как считается урон», не мутация)
  *   on_damage_dealt→ слушатель damage.dealt      (THORNS)
  *   on_attack      → слушатель attack.resolved   (SPLASH; PUNCTURE читается
  *                    боевой системой напрямую через hasPassive — это query
@@ -35,7 +38,17 @@ function getPassiveDefinitions() {
         ],
         'ARMORED' => [
             'name' => 'ARMORED', 'type' => 'damage_reduce',
-            'description' => 'Снижает получаемый урон на 1', 'value' => 1,
+            // Переработана (было: −1 урона всем, floor 1): снижает входящий
+            // урон вдвое, но только от атакующих с пассивкой ARMOR CRUSH.
+            // Против всех прочих (в т.ч. турелей/ловушек) — не работает.
+            'description' => 'Половина урона от атак с ARMOR CRUSH; против прочих не действует', 'value' => 0.5,
+        ],
+        'ARMOR_CRUSH' => [
+            'name' => 'ARMOR CRUSH', 'type' => 'resist_pierce',
+            // Атаки игрока игнорируют всё сопротивление цели (RESISTANCE и
+            // снижение ARMORED), но только если у атакующего НЕТ ARMORED
+            // (взаимоисключающая синергия — см. combat_should_pierce_resistance).
+            'description' => 'Атаки игнорируют сопротивление врага (не действует, есть ARMORED)', 'value' => 0,
         ],
         'SPLASH' => [
             'name' => 'SPLASH', 'type' => 'on_attack',
@@ -69,27 +82,45 @@ function getPassiveValue($player, $passive_name) {
 }
 
 /**
+ * ★ Query стиля атаки (как hasPassive(PUNCTURE)): должен ли атакующий-игрок
+ * игнорировать всё сопротивление цели.
+ *   Pierce-источники — прямые атаки игрока: 'player' (атака), 'splash'
+ *   (его же splash-пассивка), 'ability' (способность, кастер = игрок).
+ *   DoT/шипы/турели/ловушки не имеют источника-игрока → pierce=false.
+ */
+function combat_should_pierce_resistance($state, $source) {
+    $type = $source['type'] ?? '';
+    if (!in_array($type, ['player', 'splash', 'ability'], true)) return false;
+    $attacker = $state['players'][$source['id']] ?? null;
+    if (!$attacker) return false;
+    // Взаимоисключение: собственная ARMORED гасит пробитие брони
+    return hasPassive($attacker, 'ARMOR_CRUSH') && !hasPassive($attacker, 'ARMORED');
+}
+
+/**
  * Модификация входящего урона пассивками (старое имя сохранено как обёртка —
  * основной путь теперь слушатель passives_on_mitigate ниже).
  */
 function applyPassiveDefense($player, $damage) {
-    if (hasPassive($player, 'ARMORED')) {
-        $reduction = getPassiveValue($player, 'ARMORED');
-        $damage = max(1, $damage - $reduction);
-    }
+    // Старый путь вызывался без контекста атакующего; переработанная ARMORED
+    // реагирует только на атаки с ARMOR CRUSH, поэтому без него — no-op.
     return $damage;
 }
 
 /**
- * Слушатель damage.query_mitigate (by-ref!): ARMORED снижает урон на value,
- * но не ниже 1 (сохраняется прежнее поведение applyPassiveDefense: мин 1).
+ * Слушатель damage.query_mitigate (by-ref!): переработанная ARMORED —
+ * входящий урон уменьшается вдвое (× value=0.5), но ТОЛЬКО если источник
+ * урона — игрок с пассивкой ARMOR CRUSH. Атаки игроков БЕЗ ARMOR CRUSH
+ * проходят полным уроном (условие «не работает на игроков без данной
+ * пассивной способности»). Минимум 1 ед. сохранён (прежнее floor 1).
  */
 function passives_on_mitigate(&$state, &$payload) {
     if ($payload['target_type'] !== 'player') return;
     $player = $state['players'][$payload['target_id']] ?? null;
     if (!$player || !hasPassive($player, 'ARMORED')) return;
-    $reduction = getPassiveValue($player, 'ARMORED');
-    $payload['damage'] = max(1, $payload['damage'] - $reduction);
+    if (!combat_should_pierce_resistance($state, $payload['source'])) return;
+    $factor = getPassiveValue($player, 'ARMORED'); // 0.5
+    $payload['damage'] = max(1, (int) ceil($payload['damage'] * $factor));
 }
 
 /**
@@ -196,7 +227,11 @@ function passives_on_attack_resolved(&$state, $payload) {
         $key = $x . ',' . $y;
         if (!isset($hit[$key])) continue;
 
-        $splash_damage = calculateDamage($base_damage, $base_damage, $e['resistance']);
+        $splash_damage = calculateDamage($base_damage, $base_damage, $e['resistance'],
+                                         combat_should_pierce_resistance($state, ['type' => 'player', 'id' => $attacker_id]));
+        // source type='splash': урон атакующего игрока (pierce выше считаем от
+        // него), но THORNS жертвы не должен бить атакующего повторно — splash
+        // уже является частью его же атаки (прежнее поведение сохранено).
         $res = combat_apply_damage($state, $e['type'], $e['id'], $splash_damage,
                                    ['type' => 'splash', 'id' => $attacker_id]);
         if ($res['dealt'] > 0 || $res['shield_absorbed'] > 0) {

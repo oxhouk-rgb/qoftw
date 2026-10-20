@@ -107,12 +107,19 @@ function calculateThreatZone(&$state, $npc_id) {
  *        фазой предсказания movement_process_move, чтобы «посмотреть» путь,
  *        не сжигая боезапас турели до реального прохода клетки (иначе фаза 2
  *        видела бы ACTIONS=0 и никогда не стреляла — баг рефакторинга).
+ *
+ * ★ Целеполагание историческое (объекты/бочки не атакует) + жёсткий фильтр
+ *   живости цели: мёртвый/разлагающийся/удалённый игрок — не цель. Раньше
+ *   турель «добила» труп (повтор ATTACK-анимации каждый ход из баг-репорта):
+ *   combat_apply_damage по DEATH возвращает 0 урона, но ACTION тратился и
+ *   анимация запускалась впустую.
  */
 function objects_check_threat_zone(&$state, $player_id, $x, $y, $opts = []) {
     $dry_run = !empty($opts['dry_run']);
     $results = [];
     $player = $state['players'][$player_id] ?? null;
     if (!$player) return $results;
+    if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) return $results;
 
     foreach ($state['npcs'] as $npc_id => &$npc) {
         if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH'], true)) continue;
@@ -170,6 +177,21 @@ function objects_check_threat_zone(&$state, $player_id, $x, $y, $opts = []) {
     unset($npc);
 
     return $results;
+}
+
+/**
+ * ★ Пересчёт зон угрозы всех живых NPC (вызывается из turn_tick после фазы
+ * движения и на старте мира из init.php). LOS зависит от позиций игроков,
+ * поэтому кэш THREAT_ZONE обязан обновляться каждый тик — иначе турель
+ * продолжает «видеть» пустые клетки (анимация атаки по мёртвому/пустому) или
+ * теряет реально вошедших в зону целей.
+ */
+function objects_refresh_threat_zones(&$state) {
+    foreach ($state['npcs'] as $npc_id => &$npc) {
+        if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH'], true)) continue;
+        $npc['THREAT_ZONE'] = calculateThreatZone($state, $npc_id);
+    }
+    unset($npc);
 }
 
 /** Статусы анимаций NPC: ATTACK → IDLE через 1 сек (как resetAttackStatus для игроков) */
