@@ -18,8 +18,8 @@
 - **Табу**: ❌ React/Vue/Angular, ❌ Node.js/npm/сборщики, ❌ логика игры на клиенте,
   ❌ WebSocket/SSE вместо long polling.
 - Состояние боя живёт **только в Redis** под префиксом `battle:`; файловое состояние отсутствует.
-- `index.html` + `assets/` — **relics песочничной React-сборки, игрой не используются**. Живой
-  клиент — `game.html` + `js/game.js` + `css/game.css`. Не путать и не тянуть из них код.
+- Живой клиент — `game.html` + `js/game.js` + `css/game.css`. Ранние relics песочничной
+  React-сборки удалены из репозитория.
 
 ## 2. Карта компонентов
 
@@ -93,9 +93,6 @@
 | `targeting.php` | Универсальный доступ к сущностям | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты |
 | `abilities.php` | Реестр способностей (формат данных не менялся) + исполнение через единые сервисы combat/movement/effects | `getAbilityDefinitions`, `applyAbility` |
 | `objects.php` | NPC (зоны угрозы, LOS — пересчёт каждый ход) и ловушки; урон через единую цепочку `combat_apply_damage`; жёсткий фильтр целей: DEATH/DECAY не атакуется | `getAutonomousObjectDefinitions`, `calculateThreatZone`, `hasLineOfSightNPC`, слушатель `turn.start` (actions reset + threat) |
-
-> Legacy-файлы `abilities.php.old`, `items.php.old`, `objects.php.old` сохранены как reference
-> до подтверждения смоук-тестом; в require-графе не участвуют.
 
 ### Клиент (`js/game.js`, ~1360 строк, vanilla JS)
 
@@ -328,7 +325,7 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 14. Фасад `battle.php` — только делегаты; новый код туда не писать, но и удалять legacy-имена
     нельзя (их ожидает часть пути диагностики/debug).
 15. Открытые задачи: миграция `js/game.js` на серверное поле `rules`; смоук-тест `tests/` на стенде
-    с Redis; удаление `*.old` после подтверждения тестом.
+    с Redis (CLI-харнесс `tests/harness_engine.php` работает на in-memory фейке Redis).
 16. Тест-стенд: несколько вкладок `game.html` с разными PLAYER*; `php/debug.php` — диагностика
     загрузки движка (⚠️ делает flushDB, убивает текущий бой); проверка живости PHP/Redis.
 
