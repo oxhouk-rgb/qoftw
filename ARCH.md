@@ -78,7 +78,7 @@
 | `rules.php` | **Единый источник констант мира** (GRID 16×12, MAX_MOVE_DISTANCE=5, MOVE_SPEED=3, TURN_DURATION=5, SHIELD_REGEN_PER_TURN=1, LONG_POLL_TIMEOUT=25, тайминги анимаций) через guard `if (!defined(...)) define(...)` — порядок загрузки файлов не может уронить процесс | `rules_turn_formula()` (канон направления спрайта TURN), `rules_client_payload()` (правила в ответах init/poll) |
 | `geometry.php` | Чистые функции координат, без состояния | `parseXY/formatXY/isValidPosition/manhattan/inRadius/calculatePath/adjacentCells/cellsInRadius/directionStep` |
 | `events.php` | Шина событий: `hook(event, fn, priority)` с детерминированным порядком, `emit()` (fact-события), `emitReduce()` (query/reduser-события; **payload передаётся по ссылке** — слушатели мутируют оригинал, а не копию). Канонический список событий — в шапке файла | `hook()`, `emit()`, `emitReduce()` |
-| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей | `world_load/world_save/world_init/world_log/world_version`; путь к данным — `dirname(__DIR__, 2) . '/data/battledata.json'` |
+| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии) | `world_load/world_save/world_init/world_log/world_version`; константа ключа `REDIS_WORLD_MOVE_NOW` определяется здесь |
 | `turn.php` | Оркестратор тика хода: movement → death chain → projectiles → attack reset → npc statuses → effects tick; самовосстанавливающийся инвариант STATUS↔NEGATIVES (снятие истёкших дебаффов, в т.ч. STUNNED); защита от `turn_time=0` | `turn_tick()` (вызывается каждым poll-запросом), `turn_check_advance()`, `turn_start()` (ACTIONS/shield regen + emit `turn.start`) |
 | `bootstrap.php` | Точка сборки: require всех систем + регистрация слушателей в фиксированном порядке (combat → passives → effects → movement → objects → turn) + `engine_check_victory` | `*::register_hooks()` вызываются отсюда |
 
@@ -88,7 +88,7 @@
 |------|------|-------------------|
 | `effects.php` | **Реестр статус-эффектов** (STUNNED, BLEED и т.д.) с kind'ами `dot / cc / modifier`; длительность `[N]` ходов из NEGATIVES теперь реально тикает и снимается | `effects_apply/tick/blocks/get_modifier`; немедленная активация CC через слушатель `effect.applied`; никто больше не парсит NEGATIVES строками в сторонних файлах |
 | `combat.php` | Единая цепочка урона: mitigate-query (сопротивление, ARMORED/ARMOR_CRUSH) → щит → HP → DEATH | `combat_apply_damage()` (PUNCTURE, остановка движения только при реальном уроне), `processAttack` на её базе (TURN по формуле, SPLASH через событие) |
-| `movement.php` | Движение: две фазы сохранены (предсказание на черновом копийстве `makeTrapPreviewState` vs серверное применение `updateMovements`); блокировки/дальность — query-события | слушатели `movement.query_block` (CC), `movement.query_distance` (SWIFT/SLOWED); «догоняющие тики» на виртуальных часах мира |
+| `movement.php` | Движение: две фазы сохранены (предсказание на черновом копийстве `makeTrapPreviewState` vs серверное применение `movement_update`); блокировки/дальность — query-события | `movement_process_move`, слушатели `movement.query_block` (CC), `movement.query_distance` (SWIFT/SLOWED); «догоняющие тики» на виртуальных часах мира (`WORLD_MOVE_NOW`) |
 | `passives.php` | Реестр пассивок как слушатели шины (логика НЕ размазана по файлам) | ARMORED→`damage.query_mitigate`, THORNS→`damage.dealt`, SWIFT/SLOWED→`movement.query_distance`, REGENERATION→`turn.start`, SPLASH→`attack.resolved` (один проход по живым врагам); **ARMOR_CRUSH**→`damage.query_mitigate` атакующего: игнорирует всё сопротивление цели, но не действует, если у носителя есть ARMORED (`combat_should_pierce_resistance()`); переработанная ARMORED снижает входящий урон вдвое **только от атак с ARMOR_CRUSH** |
 | `targeting.php` | Универсальный доступ к сущностям | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты |
 | `abilities.php` | Реестр способностей (формат данных не менялся) + исполнение через единые сервисы combat/movement/effects | `getAbilityDefinitions`, `applyAbility` |
@@ -109,7 +109,7 @@
   хода, лог, победа). Плавное движение — клиентская интерполяция между `START/END_POSITION_XY`
   по `MOVE_START_TIME/MOVE_END_TIME` (авторитет — серверное время).
 - Клиент **не считает правила**; единственная «копия серверной формулы» — `previewTurn()`
-  (мгновенное зеркаление спрайта до ответа poll; должна совпадать с battle.php/action.php).
+  (мгновенное зеркаление спрайта до ответа poll; должна совпадать с `rules_turn_formula()`).
 - Локальные проверки пути (`isPathClear`, `isCellFreeForMove`, `hasLineOfSight`) — только для UX
   (подсветка/скрытие недоступных действий); финальная валидация всегда серверная.
 
@@ -121,7 +121,7 @@
   `PASSIVES`, `NEGATIVES: ["ЭФФЕКТ[ходов]"]`, `ALLY`, `LIFE`, `SPAWN_ROOM`, `TURN`, `COLOR`,
   `START/CUR/END_POSITION_XY` (строка `"x,y"`).
 - `B1.json`: `room_id`, `width/height`, `grid` (маска 0=проход/1=стена), `exits`, `stairs`
-  (переход между комнатами — **заглушка**, только логируется в `updateMovements`).
+  (переход между комнатами — **заглушка**, только логируется в `movement_update()`).
 
 ## 3. Зависимости между PHP-модулями (граф require_once + событийная шина)
 
@@ -188,13 +188,15 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 ### Ключи Redis (префикс `battle:`)
 
 `players`, `objects`, `traps`, `npcs`, `room`, `turn_time`, `projectiles`, `version`, `log`
-(последние 50 записей; клиенту отдаются последние 10). Значения — JSON-строки, version/turn_time — int.
+(последние 50 записей; клиенту отдаются последние 30), `world_move_now` (виртуальные часы
+движения, float-микровремя; обновляется каждый тик без инкремента версии). Значения секций —
+JSON-строки, version/turn_time — int.
 
 ### Конкурентность (важно знать перед правками)
 
 Явных блокировок/транзакций нет: read-modify-write всего состояния из нескольких PHP-процессов
 параллельны. Гонки гасятся короткими операциями и тем, что занятость клетки учитывает
-`END_POSITION_XY` движущихся игроков (`isPlayerAtPosition`). `action.php` содержит retry-логику
+`END_POSITION_XY` движущихся игроков (`is_player_at_position`). `action.php` содержит retry-логику
 сохранения. Это осознанный минимализм стенда — при изменении модели записи не ухудшайте это.
 
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
@@ -208,9 +210,9 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
   любое действие. Кулдаунов у способностей нет.
 - **Движение**: только по прямой, ≤5 клеток (`MAX_MOVE_DISTANCE=5`, скорость `MOVE_SPEED=3 кл/с`;
   SWIFT +1, SLOWED −2, min 1).
-  Двухфазная модель — **предсказание vs применение**: `processMove` прогоняет путь по черновому
+  Двухфазная модель — **предсказание vs применение**: `movement_process_move` прогоняет путь по черновому
   копийству (`makeTrapPreviewState`) и лишь укорачивает END на клетку мины/смертельного NPC;
-  реальный урон/STUNNED/DEATH применяются в `updateMovements()` ровно когда серверные часы
+  реальный урон/STUNNED/DEATH применяются в `movement_update()` ровно когда серверные часы
   довели игрока до клетки (синхрон с анимацией клиента). Вход на мину мгновенно завершает
   движение на её клетке; STUNNED от ловушки активируется сразу, не дожидаясь хода. Урон прерывает
   движение. Во время MOVING другие действия заблокированы сервером.
@@ -233,16 +235,19 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
   самоприменение не меняют. Клиент зеркалит через `scaleX(-1)` (класс `turn-left`). Правило CSS:
   новые keyframes либо только filter/box-shadow, либо домножение transform на
   `scaleX(var(--turn-flip))`, иначе сломают отражение. На геймплей TURN пока не влияет.
-- **Смерть**: DEATH(1с) → DECAY(1с) → при LIFE>0 респавн (полный reset HP/щита/негативов,
-  стартовая позиция или свободная в ±2; SPAWN_ROOM='SPAWN' — комнаты спавна нет, фактически
-  revive в той же B1), иначе REMOVED и позиция `-1,-1`. Клиент убирает div из DOM только при
-  REMOVED/возрождении. Статусы анимаций сбрасываются только сервером (`updateDeathAnimations`).
+- **Смерть**: DEATH(1с) → DECAY(1с) → при LIFE>0 респавн (полный reset HP/щита, строгий возврат на
+  стартовую позицию `START_POSITION_XY` — поиска свободной клетки рядом нет; SPAWN_ROOM='SPAWN' —
+  комнаты спавна нет, фактически revive в той же B1), иначе REMOVED (позиция не перестирается).
+  Клиент убирает div из DOM только при
+  REMOVED/возрождении. Статусы анимаций сбрасываются только сервером (`turn_update_death_animations`).
 - **Объекты/ловушки/NPC**: бочки имеют HP и блокируют клетки; мина срабатывает по ALLY
   (NONE — бьёт всех; иначе щадит владельца и его союзника) и становится TRIGGERED; турель — зоны
-  угрозы (манхэттен + LOS), стрельба при пересечении (`checkThreatZoneIntersection`), ATTACK→IDLE
-  через `updateNpcStatuses`. Поле `ALLY` обязательно для любого нового автономного объекта.
-- **Победа**: `checkVictory` — осталась одна команда (team = min(pid, ALLY)); передаётся в каждом
-  snapshot как `victory`.
+  угрозы (манхэттен + LOS), стрельба при пересечении (`objects_check_threat_zone`, фасад
+  `checkThreatZoneIntersection` в battle.php), ATTACK→IDLE через `objects_update_npc_statuses`
+  (фасад `updateNpcStatuses`). Поле `ALLY` обязательно для любого нового автономного объекта.
+- **Победа**: `engine_check_victory` (фасад `checkVictory`) — побеждает, когда живых осталось ≤ 1
+  (статусы DEATH/DECAY/REMOVED не считаются); без привязки к команде; winner — id последнего
+  живого. Передаётся в каждом snapshot как `victory`.
 
 ## 6. HTTP API (контракты клиент↔сервер)
 
