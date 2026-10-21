@@ -64,10 +64,10 @@
 
 | Файл | Роль | Ключевые функции |
 |------|------|------------------|
-| `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`) | `getRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `setCorsHeaders()` |
+| `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`). Соединение Redis — с ленивым переподключением: `closeRedis()` лишь помечает соединение закрытым, следующее `getRedis()` прозрачно открывает новое (никогда не возвращает null — исторический фатал «Call to a member function on null» ронял HTTP-ответ и выглядел как «потеря пакета») | `getRedis()`, `closeRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `sendJsonErrorFallback()` (аварийный JSON без обращения к Redis — для catch-блоков после `closeRedis()`), `setCorsHeaders()` |
 | `init.php` | Тонкий эндпоинт: читает `data/battledata.json` + `data/B1.json` (комната из `ROOM_ID`), считает `THREAT_ZONE` NPC, вызывает `world_init()`; в ответе отдаёт клиенту `rules` + реестры abilities/passives/effects | вызывается клиентом при выборе персонажа |
-| `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`) | `require bootstrap.php` |
-| `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
+| `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`). Единичные сбои Redis внутри цикла проглатываются (тик продолжается, ответ гарантирован по таймауту) — раньше исключение обрывало long-poll без JSON, и параллельное действие выглядело «потерянным» | `require bootstrap.php` |
+| `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability` в systems; ошибки → JSON 400, не fatal. Идемпотентность по `action_id`: повтор с уже применённым id не исполняется вторично, а отдаёт сохранённое подтверждение (`duplicate:true`) — защита от двойного применения при ретраях («потеря пакета») | `require bootstrap.php` |
 | `battle.php` | **Фасад обратной совместимости**: подключает `engine/rules.php` + `bootstrap.php`, содержит делегаты со всеми старыми именами (`processMove`, `processAttack`, `updateMovements`, `checkVictory`, …). Новый код здесь не писать | legacy-алиасы |
 | `debug.php` | Диагностика новой структуры: PHP/Redis, наличие engine/+systems/, `php -l` модулей (если CLI доступен), загрузка фасада, вывод реестров, тест `world_init → world_load → turn_tick`. ⚠️ делает `flushDB` | standalone-страница |
 
@@ -78,7 +78,7 @@
 | `rules.php` | **Единый источник констант мира** (GRID 16×12, MAX_MOVE_DISTANCE=5, MOVE_SPEED=3, TURN_DURATION=5, SHIELD_REGEN_PER_TURN=1, LONG_POLL_TIMEOUT=25, тайминги анимаций) через guard `if (!defined(...)) define(...)` — порядок загрузки файлов не может уронить процесс | `rules_turn_formula()` (канон направления спрайта TURN), `rules_client_payload()` (правила в ответах init/poll) |
 | `geometry.php` | Чистые функции координат, без состояния | `parseXY/formatXY/isValidPosition/manhattan/inRadius/calculatePath/adjacentCells/cellsInRadius/directionStep` |
 | `events.php` | Шина событий: `hook(event, fn, priority)` с детерминированным порядком, `emit()` (fact-события), `emitReduce()` (query/reduser-события; **payload передаётся по ссылке** — слушатели мутируют оригинал, а не копию). Канонический список событий — в шапке файла | `hook()`, `emit()`, `emitReduce()` |
-| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии) | `world_load/world_save/world_init/world_log/world_version`; константа ключа `REDIS_WORLD_MOVE_NOW` определяется здесь |
+| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии); журнал подтверждений действий (`REDIS_ACTION_ACKS`, hash `player|action_id → ack`, TTL 60 с) — идемпотентность при ретраях. `world_version()` устойчив к недоступному Redis (последний известный номер вместо фатала) | `world_load/world_save/world_init/world_log/world_version`, `world_action_ack_get/world_action_ack_set`; константы ключей `REDIS_WORLD_MOVE_NOW`, `REDIS_ACTION_ACKS` определяются здесь |
 | `turn.php` | Оркестратор тика хода: movement → death chain → projectiles → attack reset → npc statuses → effects tick; самовосстанавливающийся инвариант STATUS↔NEGATIVES (снятие истёкших дебаффов, в т.ч. STUNNED); защита от `turn_time=0` | `turn_tick()` (вызывается каждым poll-запросом), `turn_check_advance()`, `turn_start()` (ACTIONS/shield regen + emit `turn.start`) |
 | `bootstrap.php` | Точка сборки: require всех систем + регистрация слушателей в фиксированном порядке (combat → passives → effects → movement → objects → turn) + `engine_check_victory` | `*::register_hooks()` вызываются отсюда |
 
@@ -101,7 +101,12 @@
   цикл `poll()` (`poll.php?v=<version>&player=<ID>`, следующий запрос через 100 мс после ответа,
   retry через 2 c при ошибке).
 - Ввод: клик по клетке (`onCellClick`) открывает диалог действий (`showActionDialog`), кнопки
-  способностей показываются по дальности; отправка — `sendAction()` (retry ×3 на 5xx/parse/network).
+  способностей показываются по дальности; отправка — `sendAction()` (retry ×3 на 5xx/parse/network,
+  таймаут fetch 10 с). Каждое действие получает уникальный `action_id` (`nextActionId()`), который
+  НЕ меняется при ретраях — сервер строит на нём идемпотентность, поэтому повтор «потерянного»
+  пакета доставляет действие, но не дублирует его. Ретраи сериализуются (`actionInFlight`), чтобы
+  повтор не наложился на ещё «висящий» оригинальный запрос. Детерминированные отказы правил
+  (HTTP 400: вне радиуса, путь заблокирован, нет AP) не ретраятся.
 - Рендер: `render(data)` — полный снимок → сетка, сущности, снаряды, UI (HP/щит/ACTIONS, таймер
   хода, лог, победа). Плавное движение — клиентская интерполяция между `START/END_POSITION_XY`
   по `MOVE_START_TIME/MOVE_END_TIME` (авторитет — серверное время).
@@ -175,9 +180,14 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
    turn_time, turn_duration, time_to_next_turn, victory`) — КЛЮЧИ ОТВЕТА НА ВЕРХНЕМ УРОВНЕ,
    без обёртки `data` (клиентский `render(data)` читает `data.players` и т.д. напрямую;
    исторический контракт). Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
-3. **action**: клиент → `POST php/action.php` (JSON) → предварительная валидация (жив/не CC/AP) →
-   функция systems мутирует `$state` (by-ref) → `world_save` (incr version) →
-   все зависшие poll мгновенно отдают новый мир. Ошибки — JSON 400, не fatal.
+3. **action**: клиент → `POST php/action.php` (JSON, с обязательным для ретраев поля `action_id`) →
+   проверка ack-журнала (идемпотентность: уже применённый `action_id` не исполняется вторично,
+   ответ — сохранённое подтверждение + `duplicate:true`) → предварительная валидация (жив/не CC/AP) →
+   функция systems мутирует `$state` (by-ref) → `world_save` (incr version) → запись ack →
+   все зависшие poll мгновенно отдают новый мир. Ошибки валидации — JSON 400, не fatal;
+   версии читаются ДО `closeRedis()`, аварийные ответы идут через `sendJsonErrorFallback()`
+   (без обращения к Redis), чтобы HTTP-ответ никогда не обрывался на середине («потеря пакета»).
+   Доставка действий — at-least-once (ретраи клиента) + exactly-once применение (идемпотентность сервера).
 4. **Контракты**: любой mutate состояния **обязан** закончиться сохранением через `world_save`
    (он сам делает incr версии; прямой `incr` в стороннем коде — антипаттерн). Забыли save →
    клиенты «зависнут на старом мире».
@@ -186,7 +196,9 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 
 `players`, `objects`, `traps`, `npcs`, `room`, `turn_time`, `projectiles`, `version`, `log`
 (последние 50 записей; клиенту отдаются последние 30), `world_move_now` (виртуальные часы
-движения, float-микровремя; обновляется каждый тик без инкремента версии). Значения секций —
+движения, float-микровремя; обновляется каждый тик без инкремента версии), `action_acks`
+(hash `player|action_id → JSON-подтверждение`, TTL 60 с — журнал идемпотентности действий при
+ретраях; не участвует в версии и snapshot'ах). Значения секций —
 JSON-строки, version/turn_time — int.
 
 ### Конкурентность (важно знать перед правками)
@@ -196,6 +208,9 @@ JSON-строки, version/turn_time — int.
 `END_POSITION_XY` движущихся игроков (`is_player_at_position`; мёртвые DEATH/DECAY/REMOVED клетку
 не занимают). `action.php` содержит retry-логику
 сохранения. Это осознанный минимализм стенда — при изменении модели записи не ухудшайте это.
+Потеря HTTP-ответа между сервером и клиентом («потеря пакета») компенсируется не блокировками,
+а идемпотентностью: повтор запроса с тем же `action_id` отклоняется ack-журналом до валидации AP,
+поэтому двойного списания очков/урона не происходит (см. §4.3).
 
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
 
@@ -257,12 +272,13 @@ JSON-строки, version/turn_time — int.
 |---|---|---|---|
 | `php/init.php` | GET | — | `{success, message, players[], room, rules, abilities, passives, effects}`; сайд-эффект: полный rebuild Redis |
 | `php/poll.php` | GET | `v` (int версия клиента), `player` (PLAYER*, опционально — тики идут в любом случае) | flat snapshot (§4.2, **без обёртки `data`**), опционально `timeout:true` |
-| `php/action.php` | POST | JSON `{action: move\|attack\|ability, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
+| `php/action.php` | POST | JSON `{action: move\|attack\|ability, player, x, y, ability?, action_id}`; `action_id` — уникальный id действия от клиента (поле необязательное для обратной совместимости, но без него ретраи не идемпотентны) | `{success, message, version}`, при повторе уже применённого `action_id` — `{success:true, duplicate:true}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
 | `php/debug.php` | GET | — | HTML-дамп диагностики движка (не JSON!), ⚠️ flushDB в конце |
 
 Все ответы — `application/json; charset=utf-8`, ошибки — `jsonError` (`{success:false,message}` +
 HTTP code). `error_reporting(0)` в config.php — **ошибки PHP в stdout убивают JSON**, поэтому
-вывод только через `jsonResponse` (он чистит буферы). Поле `rules` в ответах init/poll —
+вывод только через `jsonResponse` (он чистит буферы); в catch-блоках, достижимых после
+`closeRedis()`, — только через `sendJsonErrorFallback()` (не трогает Redis). Поле `rules` в ответах init/poll —
 канон серверных констант (`rules_client_payload()`); клиент пока использует собственный `CONFIG`
 (миграция на серверные правила — открытая задача, см. §7).
 
