@@ -90,7 +90,7 @@
 | `combat.php` | Единая цепочка урона: mitigate-query (сопротивление, ARMORED/ARMOR_CRUSH) → щит → HP → DEATH | `combat_apply_damage()` (PUNCTURE, остановка движения только при реальном уроне), `processAttack` на её базе (TURN по формуле, SPLASH через событие) |
 | `movement.php` | Движение: две фазы сохранены (предсказание на черновом копийстве `makeTrapPreviewState` vs серверное применение `movement_update`); блокировки/дальность — query-события | `movement_process_move`, слушатели `movement.query_block` (CC), `movement.query_distance` (SWIFT/SLOWED); «догоняющие тики» на виртуальных часах мира (`WORLD_MOVE_NOW`) |
 | `passives.php` | Реестр пассивок как слушатели шины (логика НЕ размазана по файлам) | ARMORED→`damage.query_mitigate`, THORNS→`damage.dealt`, SWIFT/SLOWED→`movement.query_distance`, REGENERATION→`turn.start`, SPLASH→`attack.resolved` (один проход по живым врагам); **ARMOR_CRUSH**→`damage.query_mitigate` атакующего: игнорирует всё сопротивление цели, но не действует, если у носителя есть ARMORED (`combat_should_pierce_resistance()`); переработанная ARMORED снижает входящий урон вдвое **только от атак с ARMOR_CRUSH** |
-| `targeting.php` | Универсальный доступ к сущностям | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты |
+| `targeting.php` | Универсальный доступ к сущностям + правила проходимости клеток | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты; `is_cell_passable()` (стены/целые объекты/живые NPC блокируют), `is_player_at_position()` (DEATH/DECAY/REMOVED клетку не занимают) |
 | `abilities.php` | Реестр способностей (формат данных не менялся) + исполнение через единые сервисы combat/movement/effects | `getAbilityDefinitions`, `applyAbility` |
 | `objects.php` | NPC (зоны угрозы, LOS — пересчёт каждый ход) и ловушки; урон через единую цепочку `combat_apply_damage`; жёсткий фильтр целей: DEATH/DECAY не атакуется | `getAutonomousObjectDefinitions`, `calculateThreatZone`, `hasLineOfSightNPC`, слушатель `turn.start` (actions reset + threat) |
 
@@ -193,7 +193,8 @@ JSON-строки, version/turn_time — int.
 
 Явных блокировок/транзакций нет: read-modify-write всего состояния из нескольких PHP-процессов
 параллельны. Гонки гасятся короткими операциями и тем, что занятость клетки учитывает
-`END_POSITION_XY` движущихся игроков (`is_player_at_position`). `action.php` содержит retry-логику
+`END_POSITION_XY` движущихся игроков (`is_player_at_position`; мёртвые DEATH/DECAY/REMOVED клетку
+не занимают). `action.php` содержит retry-логику
 сохранения. Это осознанный минимализм стенда — при изменении модели записи не ухудшайте это.
 
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
@@ -206,7 +207,9 @@ JSON-строки, version/turn_time — int.
   перепроверка зон угрозы для стоящих игроков. Очерёдности нет — real-time со стоимостью 1 AP за
   любое действие. Кулдаунов у способностей нет.
 - **Движение**: только по прямой, ≤5 клеток (`MAX_MOVE_DISTANCE=5`, скорость `MOVE_SPEED=3 кл/с`;
-  SWIFT +1, SLOWED −2, min 1).
+  SWIFT +1, SLOWED −2, min 1). Проходимые клетки — `is_cell_passable()` (стены, неразрушенные
+  объекты и **живые NPC** блокируют; мёртвые DEATH/DECAY/REMOVED игроки клетку не занимают —
+  `is_player_at_position`).
   Двухфазная модель — **предсказание vs применение**: `movement_process_move` прогоняет путь по черновому
   копийству (`makeTrapPreviewState`) и лишь укорачивает END на клетку мины/смертельного NPC;
   реальный урон/STUNNED/DEATH применяются в `movement_update()` ровно когда серверные часы
@@ -214,7 +217,7 @@ JSON-строки, version/turn_time — int.
   движение на её клетке; STUNNED от ловушки активируется сразу, не дожидаясь хода. Урон прерывает
   движение. Во время MOVING другие действия заблокированы сервером.
 - **Атака**: луч по прямой в пределах RANGE (BLINDED → /2); без PUNCTURE останавливается на первом
-  враге/препятствии, с PUNCTURE пробивает дальше; стены/бочки блокируют всегда.
+  враге/препятствии, с PUNCTURE пробивает дальше; стены/бочки/живые NPC блокируют всегда.
 - **Формула урона** (единая цепочка `combat_apply_damage` в `systems/combat.php`): база
   `ceil(max(ATTACK,1) × (1 − RESISTANCE×10%))`, RES≤90%, минимум 1 — применяется только если
   атакующий НЕ пробивает сопротивление; **ARMOR_CRUSH** (у атакующего, при отсутствии у него
@@ -237,7 +240,9 @@ JSON-строки, version/turn_time — int.
   комнаты спавна нет, фактически revive в той же B1), иначе REMOVED (позиция не перестирается).
   Клиент убирает div из DOM только при
   REMOVED/возрождении. Статусы анимаций сбрасываются только сервером (`turn_update_death_animations`).
-- **Объекты/ловушки/NPC**: бочки имеют HP и блокируют клетки; мина срабатывает по ALLY
+- **Объекты/ловушки/NPC**: бочки имеют HP и блокируют клетки; **живой NPC (турель) — тоже
+  непроходимое препятствие** (клетку занимает `is_cell_passable()`, после DESTROYED/DEATH/REMOVED
+  освобождает); мина срабатывает по ALLY
   (NONE — бьёт всех; иначе щадит владельца и его союзника) и становится TRIGGERED; турель — зоны
   угрозы (манхэттен + LOS), стрельба при пересечении (`objects_check_threat_zone`, фасад
   `checkThreatZoneIntersection` в battle.php), ATTACK→IDLE через `objects_update_npc_statuses`
