@@ -33,59 +33,71 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
 
     try {
         while (true) {
-            $state = world_load();
+            // ★ Устойчивость long-poll к сбоям хранилища: раньше любое исключение
+            // внутри цикла (например временный READ_TIMEOUT на перегруженном Redis)
+            // улетало в catch и ОБРЫВАЛО соединение без JSON-ответа. Клиент
+            // воспринимал это как сетевую ошибку, а параллельно отправленное в этот
+            // момент действие выглядело «потерянным». Теперь единичные сбои
+            // проглатываются, цикл продолжает тикать; ответ гарантирован по таймауту.
+            try {
+                $state = world_load();
 
-            // ★ turn_time = серверный дедлайн хода. Если init.php/предыдущий
-            // процесс его не задал (0) — фиксируем сейчас и сохраняем ОДИН раз,
-            // иначе build_poll_response будет отдавать TURN_DURATION вместо
-            // обратного отсчёта, а turn_check_advance на первой же проверке
-            // устроит шторм версий «ход каждый тик» (баг залипшего таймера).
-            if (!isset($state['turn_time']) || (int)$state['turn_time'] <= 0) {
-                $state['turn_time'] = time();
-                world_save($state);
+                // ★ turn_time = серверный дедлайн хода. Если init.php/предыдущий
+                // процесс его не задал (0) — фиксируем сейчас и сохраняем ОДИН раз,
+                // иначе build_poll_response будет отдавать TURN_DURATION вместо
+                // обратного отсчёта, а turn_check_advance на первой же проверке
+                // устроит шторм версий «ход каждый тик» (баг залипшего таймера).
+                if (!isset($state['turn_time']) || (int)$state['turn_time'] <= 0) {
+                    $state['turn_time'] = time();
+                    world_save($state);
+                }
+
+                // Серверный тик движка (включая ход мира turn_check_advance — он
+                // внутри turn_tick; повторный вызов отсюда устроил бы двойной
+                // advance при редких опросах).
+                // ★ ВАЖНО: тик выполняется для ЛЮБОГО poll-клиента, даже если он
+                // не передал ?player= или передал неизвестный id. Мир — общий:
+                // эффекты (STUNNED/BLEED), движение, смерть и таймер хода обязаны
+                // тикать независимо от роли читателя (иначе оглушение «висит
+                // вечно», пока игрок не откроет свой клиент заново).
+                $changed_by_tick = turn_tick($state);
+                if ($changed_by_tick) {
+                    world_save($state);
+                }
+
+                $server_version = world_version();
+            } catch (Exception $e) {
+                usleep(200000); // 200ms пауза после сбоя — следующий тик
+                if (time() - $start_time >= $timeout) break; // отдадим снимок по таймауту
+                continue;
             }
 
-            // Серверный тик движка (включая ход мира turn_check_advance — он
-            // внутри turn_tick; повторный вызов отсюда устроил бы двойной
-            // advance при редких опросах).
-            // ★ ВАЖНО: тик выполняется для ЛЮБОГО poll-клиента, даже если он
-            // не передал ?player= или передал неизвестный id. Мир — общий:
-            // эффекты (STUNNED/BLEED), движение, смерть и таймер хода обязаны
-            // тикать независимо от роли читателя (иначе оглушение «висит
-            // вечно», пока игрок не откроет свой клиент заново).
-            $changed_by_tick = turn_tick($state);
-            if ($changed_by_tick) {
-                world_save($state);
+            if ($server_version !== $client_version) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(build_poll_response($state, $server_version), JSON_UNESCAPED_UNICODE);
+                closeRedis();
+                exit;
             }
 
-        $server_version = world_version();
+            if (time() - $start_time >= $timeout) {
+                break; // таймаут — отдадим снимок ниже
+            }
 
-        if ($server_version !== $client_version) {
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(build_poll_response($state, $server_version), JSON_UNESCAPED_UNICODE);
-            closeRedis();
-            exit;
+            usleep(100000); // 100ms
         }
 
-        if (time() - $start_time >= $timeout) {
-            // Таймаут long-poll: отдаём текущий снимок с timeout=true (как в старом контракте),
-            // чтобы клиент обновил таймер хода даже при отсутствии событий.
-            header('Content-Type: application/json; charset=utf-8');
-            $resp = build_poll_response($state, $server_version);
-            $resp['timeout'] = true;
-            echo json_encode($resp, JSON_UNESCAPED_UNICODE);
-            closeRedis();
-            exit;
-        }
-
-        usleep(100000); // 100ms
-    }
-} catch (Exception $e) {
-    http_response_code(500);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => 'Ошибка polling', 'message' => $e->getMessage()]);
-    closeRedis();
-    exit;
+        // Таймаут long-poll: отдаём текущий снимок с timeout=true (как в старом контракте),
+        // чтобы клиент обновил таймер хода даже при отсутствии событий.
+        header('Content-Type: application/json; charset=utf-8');
+        $resp = build_poll_response($state, $server_version);
+        $resp['timeout'] = true;
+        echo json_encode($resp, JSON_UNESCAPED_UNICODE);
+        closeRedis();
+        exit;
+} catch (Throwable $e) {
+    // Гарантированный JSON-ответ вместо оборванного соединения («потеря пакета»).
+    // sendJsonErrorFallback не трогает Redis — безопасен и после closeRedis().
+    sendJsonErrorFallback('Ошибка polling: ' . $e->getMessage(), 500);
 }
 
 /**

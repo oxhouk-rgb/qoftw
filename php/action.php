@@ -38,6 +38,25 @@ try {
         jsonError('Не указан action или player');
     }
 
+    // Идемпотентность при ретраях («потеря пакета»): клиент генерирует уникальный
+    // action_id для каждого действия и повторяет запрос с ТЕМ ЖЕ id, если ответ
+    // потерян. Если сервер уже применил это действие — повторно не применяем,
+    // а отдаём сохранённое подтверждение (см. world_action_ack_get/set).
+    $action_id = isset($input['action_id']) ? substr((string)$input['action_id'], 0, 64) : null;
+    $ack = world_action_ack_get($player_id, $action_id);
+    if ($ack !== null && !empty($ack['success'])) {
+        closeRedis();
+        ob_end_clean();
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => true,
+            'message' => $ack['message'] ?? 'Действие уже выполнено',
+            'version' => world_version(),
+            'duplicate' => true,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     $state = world_load();
 
     if (!isset($state['players'][$player_id])) {
@@ -152,7 +171,11 @@ try {
             movement_finalize_start($state, $player_id);
         }
 
-        // Retry-логика сохранения (3 попытки), версия инкрементит world_save
+        // Retry-логика сохранения (3 попытки), версия инкрементит world_save.
+        // ★ Критично для «потери пакета»: world_save обязан реально записать
+        // состояние — если Redis-соединение почему-то закрыто, getRedis()
+        // восстановит его (ленивое переподключение), а pipeline-ошибки ловятся
+        // здесь же; при полном отказе возвращаем 5xx, чтобы клиент ретраировал.
         $saveSuccess = false;
         $saveAttempts = 0;
         while (!$saveSuccess && $saveAttempts < 3) {
@@ -169,13 +192,26 @@ try {
             }
         }
 
+        // Версию читаем ДО закрытия соединения — раньше getRedis() после
+        // closeRedis() возвращал null → фатал, успешное действие «терялось»
+        // для клиента (битый ответ → retry → конфликт повторного применения).
+        $new_version = world_version();
+
+        // Подтверждение идемпотентности: сохраняем результат действия, чтобы
+        // повтор с тем же action_id не применился вторично.
+        world_action_ack_set($player_id, $action_id, [
+            'success' => true,
+            'message' => $result['message'],
+            'version' => $new_version,
+        ]);
+
         closeRedis();
         ob_end_clean();
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'success' => true,
             'message' => $result['message'],
-            'version' => (int)getRedis()->get(REDIS_VERSION),
+            'version' => $new_version,
         ], JSON_UNESCAPED_UNICODE);
         exit;
     } else {
@@ -184,7 +220,13 @@ try {
     }
 
 } catch (Exception $e) {
-    jsonError('Ошибка обработки действия: ' . $e->getMessage());
+    // ВАЖНО: этот блок достижим и ПОСЛЕ closeRedis() (например исключение из
+    // финального echo/заголовков). jsonError→jsonResponse не должен трогать
+    // Redis — иначе getRedis() на мёртвом соединении кидал новое исключение
+    // прямо в echo, обрывая HTTP-ответ: клиент считал это «потерей пакета».
+    clearOutputBuffers();
+    sendJsonErrorFallback('Ошибка обработки действия: ' . $e->getMessage());
 } catch (Throwable $e) {
-    jsonError('Критическая ошибка: ' . $e->getMessage());
+    clearOutputBuffers();
+    sendJsonErrorFallback('Критическая ошибка: ' . $e->getMessage());
 }

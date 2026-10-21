@@ -30,45 +30,81 @@ if (!defined('REDIS_TURN_TIME')) define('REDIS_TURN_TIME', REDIS_PREFIX . 'turn_
 if (!defined('REDIS_PROJECTILES')) define('REDIS_PROJECTILES', REDIS_PREFIX . 'projectiles');
 if (!defined('REDIS_VERSION')) define('REDIS_VERSION', REDIS_PREFIX . 'version');
 if (!defined('REDIS_LOG')) define('REDIS_LOG', REDIS_PREFIX . 'log');
+// Журнал подтверждённых действий (защита от «потери пакета» при ретраях — см. engine/world.php)
+if (!defined('REDIS_ACTION_ACKS')) define('REDIS_ACTION_ACKS', REDIS_PREFIX . 'action_acks');
 
 // Подключение к Redis
-if (!function_exists('getRedis')) {
-    function getRedis() {
+// РАЗДЕЛЕНИЕ ХЕНДЛАРА И ФЛАГА СОЕДИНЕНИЯ — исправление бага «потери пакета»:
+// раньше closeRedis() обнулял единственный статик-хендлар, а config.php
+// повторно не подключается (require_once) — любое обращение к getRedis() ПОСЛЕ
+// closeRedis() возвращало null и роняло процесс на фатал
+// "Call to a member function ... on null" уже в момент вывода ответа: клиент
+// получал оборванный/500-й HTTP-ответ и считал это потерей пакета (а действие,
+// успевшее сохраниться в мир, при повторе упиралось в потраченные очки).
+// Теперь хендлар живёт отдельно, closeRedis() лишь помечает соединение
+// закрытым, а следующее обращение прозрачно открывает новое.
+if (!function_exists('redisConnect')) {
+    function redisConnect() {
+        // Проверяем наличие расширения Redis
+        if (!class_exists('Redis')) {
+            throw new Exception('Расширение PHP Redis не установлено. Установите php_redis.dll (Windows) или phpredis (Linux)');
+        }
+        try {
+            $r = new Redis();
+            $connected = @$r->connect(REDIS_HOST, REDIS_PORT, 2); // 2 сек таймаут
+            if (!$connected) {
+                throw new Exception('Не удалось подключиться к Redis на ' . REDIS_HOST . ':' . REDIS_PORT . '. Убедитесь что redis-server запущен!');
+            }
+            $r->select(REDIS_DB);
+            $r->setOption(Redis::OPT_READ_TIMEOUT, 2); // Таймаут чтения 2 секунды
+        } catch (Throwable $e) {
+            throw new Exception('Redis ошибка: ' . $e->getMessage());
+        }
+        return $r;
+    }
+}
+
+// Флаг «соединение открыто» живёт в $GLOBALS — единственное место, общее для
+// всех функций (static-переменные разных функций в PHP отдельны и неизбежно
+// рассинхронизировались бы).
+if (!function_exists('isRedisConnected')) {
+    function isRedisConnected() {
+        return !empty($GLOBALS['redis_connected']);
+    }
+}
+
+if (!function_exists('getRedisHandle')) {
+    function getRedisHandle() {
         static $redis = null;
-        if ($redis === null) {
-            // Проверяем наличие расширения Redis
-            if (!class_exists('Redis')) {
-                throw new Exception('Расширение PHP Redis не установлено. Установите php_redis.dll (Windows) или phpredis (Linux)');
-            }
-        
-            try {
-                $redis = new Redis();
-                $connected = @$redis->connect(REDIS_HOST, REDIS_PORT, 2); // 2 сек таймаут
-                if (!$connected) {
-                    throw new Exception('Не удалось подключиться к Redis на ' . REDIS_HOST . ':' . REDIS_PORT . '. Убедитесь что redis-server запущен!');
-                }
-                $redis->select(REDIS_DB);
-                $redis->setOption(Redis::OPT_READ_TIMEOUT, 2); // Таймаут чтения 2 секунды
-            } catch (Throwable $e) {
-                throw new Exception('Redis ошибка: ' . $e->getMessage());
-            }
+        if ($redis === null || !isRedisConnected()) {
+            $redis = redisConnect(); // бросает Exception при недоступном Redis
+            $GLOBALS['redis_connected'] = true;
         }
         return $redis;
     }
 }
 
-// Закрытие Redis соединения
+// Публичное поведение getRedis(): живое соединение гарантируется ленивым
+// переподключением; при недоступном Redis бросается исключение (никогда null).
+if (!function_exists('getRedis')) {
+    function getRedis() {
+        return getRedisHandle();
+    }
+}
+
+// Закрытие Redis соединения (идемпотентно; следующее обращение к getRedis()
+// прозрачно откроет новое соединение).
 if (!function_exists('closeRedis')) {
     function closeRedis() {
-        static $redis = null;
-        if ($redis !== null) {
-            try {
-                $redis->close();
-            } catch (Throwable $e) {
-                // Игнорируем ошибки закрытия
-            }
-            $redis = null;
+        if (!isRedisConnected()) {
+            return; // уже закрыто
         }
+        try {
+            getRedisHandle()->close();
+        } catch (Throwable $e) {
+            // Игнорируем ошибки закрытия
+        }
+        $GLOBALS['redis_connected'] = false;
     }
 }
 
@@ -193,5 +229,28 @@ if (!function_exists('jsonError')) {
     function jsonError($message, $code = 500) {
         http_response_code($code);
         jsonResponse(['success' => false, 'message' => $message]);
+    }
+}
+
+// Аварийный JSON-ответ без обращения к Redis (для catch-блоков эндпоинтов,
+// достижимых ПОСЛЕ closeRedis(): обычный jsonError мог бросить новое
+// исключение из echo и оборвать HTTP-ответ — «потеря пакета» на клиенте).
+if (!function_exists('clearOutputBuffers')) {
+    function clearOutputBuffers() {
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+    }
+}
+
+if (!function_exists('sendJsonErrorFallback')) {
+    function sendJsonErrorFallback($message, $code = 500) {
+        clearOutputBuffers();
+        if (!headers_sent()) {
+            http_response_code($code);
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        echo json_encode(['success' => false, 'message' => $message], JSON_UNESCAPED_UNICODE);
+        exit;
     }
 }
