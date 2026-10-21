@@ -163,7 +163,9 @@ function get_targets_in_area($state, $center_x, $center_y, $radius, $caster_id) 
 function is_player_at_position($state, $x, $y, $exclude_id = null) {
     foreach ($state['players'] as $pid => $player) {
         if ($pid === $exclude_id) continue;
-        if ($player['STATUS'] === 'DEATH') continue;
+        // Мертвый/распадающийся/удаленный игрок клетку НЕ занимает (иначе
+        // сервер продолжал блокировать клетку после смерти игрока)
+        if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) continue;
 
         $pos = parseXY($player['CUR_POSITION_XY']);
         if ($pos['x'] === $x && $pos['y'] === $y) return true;
@@ -177,7 +179,8 @@ function is_player_at_position($state, $x, $y, $exclude_id = null) {
 }
 
 /**
- * Проходимость клетки: стена (grid==0) или неразрушенный объект блокируют.
+ * Проходимость клетки: стена (grid==0), неразрушенный объект или живой NPC
+ * (например TURRET) блокируют.
  * (Игроков проверяет вызывающий — см. is_player_at_position.)
  */
 function is_cell_passable($state, $x, $y) {
@@ -188,6 +191,13 @@ function is_cell_passable($state, $x, $y) {
     foreach ($state['objects'] as $obj) {
         if ($obj['STATUS'] === 'DESTROYED') continue;
         $pos = parseXY($obj['POSITION_XY']);
+        if ($pos['x'] === $x && $pos['y'] === $y) return false;
+    }
+    // Живой NPC (TURRET и т.п.) — непроходимое препятствие, как игрок или объект;
+    // уничтоженные/мертвые/удаленные NPC клетку не занимают.
+    foreach ($state['npcs'] as $npc) {
+        if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH', 'REMOVED'], true)) continue;
+        $pos = parseXY($npc['POSITION_XY']);
         if ($pos['x'] === $x && $pos['y'] === $y) return false;
     }
     return true;
