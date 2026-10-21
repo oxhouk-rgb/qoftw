@@ -300,8 +300,20 @@ function isPathClear(x1, y1, x2, y2) {
                 for (const pid in state.data.players) {
                     if (pid === state.playerId) continue;
                     const player = state.data.players[pid];
-                    if (player.STATUS === 'DEATH' || player.STATUS === 'REMOVED') continue;
+                    if (player.STATUS === 'DEATH' || player.STATUS === 'DECAY' || player.STATUS === 'REMOVED') continue;
                     const pos = parseXY(player.CUR_POSITION_XY);
+                    if (pos.x === cx && pos.y === cy) {
+                        return false;
+                    }
+                }
+            }
+
+            // Проверяем живых NPC (TURRET и т.п. — непроходимы как препятствие)
+            if (state.data.npcs) {
+                for (const nid in state.data.npcs) {
+                    const npc = state.data.npcs[nid];
+                    if (npc.STATUS === 'DESTROYED' || npc.STATUS === 'DEATH' || npc.STATUS === 'REMOVED') continue;
+                    const pos = parseXY(npc.POSITION_XY);
                     if (pos.x === cx && pos.y === cy) {
                         return false;
                     }
@@ -350,8 +362,20 @@ function isCellFreeForMove(x, y) {
         for (const pid in state.data.players) {
             if (pid === state.playerId) continue;
             const player = state.data.players[pid];
-            if (player.STATUS === 'DEATH' || player.STATUS === 'REMOVED') continue;
+            if (player.STATUS === 'DEATH' || player.STATUS === 'DECAY' || player.STATUS === 'REMOVED') continue;
             const pos = parseXY(player.CUR_POSITION_XY);
+            if (pos.x === x && pos.y === y) {
+                return false;
+            }
+        }
+    }
+
+    // Проверяем живых NPC (TURRET и т.п. — клетку занять нельзя, пока NPC жив)
+    if (state.data.npcs) {
+        for (const nid in state.data.npcs) {
+            const npc = state.data.npcs[nid];
+            if (npc.STATUS === 'DESTROYED' || npc.STATUS === 'DEATH' || npc.STATUS === 'REMOVED') continue;
+            const pos = parseXY(npc.POSITION_XY);
             if (pos.x === x && pos.y === y) {
                 return false;
             }
