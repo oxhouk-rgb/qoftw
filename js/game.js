@@ -154,79 +154,122 @@ async function poll() {
 // === ОТПРАВКА ДЕЙСТВИЙ ===
 
 /**
- * Отправить действие на сервер с retry логикой
+ * Счётчик action_id: уникален в пределах клиента/сессии. Каждое отправляемое
+ * действие получает свой id, который НЕ меняется при ретраях — на нём сервер
+ * строит идемпотентность (см. world_action_ack_get/set в php/engine/world.php).
  */
-async function sendAction(action, params, retryCount = 0) {
+let actionIdCounter = 0;
+function nextActionId() {
+    actionIdCounter++;
+    return 'a' + Date.now().toString(36) + '_' + actionIdCounter;
+}
+
+// Промис последней незавершённой попытки отправки действия. Нужен, чтобы
+// повтор НЕ накладывался на ещё «висящий» оригинальный запрос: если бы retry
+// пришёл на сервер раньше оригинала, он был бы отвергнут валидацией, а
+// оригинал применился бы позже — игрок увидел бы «действие не прошло».
+let actionInFlight = Promise.resolve();
+
+/**
+ * Отправить действие на сервер с retry логикой.
+ *
+ * ★ Защита от «потери пакета» (критично для прототипа онлайн-игры):
+ * повтор запускается при сетевой ошибке, таймауте, HTTP 5xx или битом JSON —
+ * во всех этих случаях непонятно, дошло ли действие до мира:
+ *   - запрос потерялся в сети → повтор доставит его, действие применится;
+ *   - ответ потерян, но действие уже применено → сервер увидит знакомый
+ *     action_id и НЕ применит его повторно (ответит сохранённое
+ *     подтверждение, поле duplicate:true).
+ * Валидные отказы правил (HTTP 400: вне радиуса, путь заблокирован, нет AP)
+ * не ретраятся — они детерминированы.
+ */
+async function sendAction(action, params, retryCount = 0, actionId = null) {
     const MAX_RETRIES = 3;
+
+    if (actionId === null) {
+        actionId = nextActionId(); // новое действие — новый идемпотентный id
+    }
+
     const body = {
         action: action,
         player: state.playerId,
-        ...params
+        ...params,
+        action_id: actionId
     };
-    
+
+    let finish;
+    const prev = actionInFlight;
+    actionInFlight = new Promise(resolve => { finish = resolve; });
+
     try {
+        await prev; // ждём завершения предыдущей попытки этого же действия
         const resp = await fetch(CONFIG.PHP_URL + 'action.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(10000) // Таймаут 10 секунд
         });
-        
+
         if (!resp.ok) {
             const errorText = await resp.text();
             console.log('Action HTTP error:', resp.status, errorText);
-            
-            // Retry при ошибке сервера
+
+            // Retry при ошибке сервера (действие могло НЕ примениться —
+            // повтор безопасен благодаря идемпотентности по action_id)
             if (resp.status >= 500 && retryCount < MAX_RETRIES) {
                 console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
                 await new Promise(resolve => setTimeout(resolve, 1000)); // Ждём 1 секунду
-                return sendAction(action, params, retryCount + 1);
+                return sendAction(action, params, retryCount + 1, actionId);
             }
-            
+
             showNotification('Ошибка сервера: ' + resp.status, 'error');
             return { success: false, message: 'HTTP error' };
         }
-        
+
         const responseText = await resp.text();
-        
+
         let result;
         try {
             result = JSON.parse(responseText);
         } catch (e) {
             console.log('Action JSON parse error. Raw response:', responseText.substring(0, 200));
-            
-            // Retry при ошибке парсинга
+
+            // Retry при ошибке парсинга: обрванный/грязный ответ = возможная
+            // «потеря пакета»; повтор с тем же action_id не удвоит действие.
             if (retryCount < MAX_RETRIES) {
                 console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                return sendAction(action, params, retryCount + 1);
+                return sendAction(action, params, retryCount + 1, actionId);
             }
-            
+
             showNotification('Ошибка ответа сервера', 'error');
             return { success: false, message: 'JSON parse error' };
         }
-        
+
         if (!result.success) {
             console.log('Action failed:', result.message);
             showNotification(result.message, 'warning');
         } else {
-            // Успешное действие
+            // Успешное действие (duplicate:true — это подтверждение действия,
+            // применённого ранее, чей ответ был потерян; для игрока тот же успех)
             showNotification('Действие выполнено', 'success');
         }
-        
+
         return result;
     } catch (err) {
         console.log('Action error:', err);
-        
-        // Retry при ошибке подключения
+
+        // Retry при ошибке подключения (fetch/AbortSignal.timeout)
         if (retryCount < MAX_RETRIES) {
             console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
             await new Promise(resolve => setTimeout(resolve, 1000));
-            return sendAction(action, params, retryCount + 1);
+            return sendAction(action, params, retryCount + 1, actionId);
         }
-        
+
         showNotification('Ошибка подключения: ' + err.message, 'error');
         return { success: false, message: err.message };
+    } finally {
+        finish();
     }
 }
 

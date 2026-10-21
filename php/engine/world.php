@@ -101,8 +101,76 @@ function world_log($state, $message) {
 }
 
 /**
- * Текущая версия мира (для long-poll цикла).
+ * Текущая версия мира (для long-poll цикла). Устойчив к закрытому соединению:
+ * при недоступном Redis возвращает последний известный номер вместо фатала.
  */
 function world_version() {
-    return (int)getRedis()->get(REDIS_VERSION);
+    static $last = 0;
+    try {
+        $v = (int)getRedis()->get(REDIS_VERSION);
+        if ($v > 0) $last = $v;
+    } catch (Throwable $e) {
+        // Redis недоступен — отдаём последний известный (не роняем ответ)
+    }
+    return $last;
+}
+
+// ─── ПОДТВЕРЖДЕНИЯ ДЕЙСТВИЙ (защита от «потери пакета») ────────────────────
+// Контракт: action.php принимает JSON с необязательным полем `action_id`
+// (уникальный id, который клиент генерирует на каждое отправляемое действие).
+//   - Если действие с таким id уже применён и подтверждён (есть в ack-журнале),
+//     сервер НЕ применяет его повторно, а отвечает закэшированный успех —
+//     это защита от двойного применения при ретраях («нет очков действий»,
+//     двойной урон, двойной ход).
+//   - Если сервер упал ДО записи ack, но ПОСЛЕ world_save (действие уже в мире),
+//     повтор от клиента будет отвергнут штатной валидацией (MOVING / ACTIONS<=0)
+//     — состояние консистентно, дубля нет.
+//   - Если запрос действительно потерян (сервер его не получил) — клиент ретраит
+//     с тем же action_id, и действие проходит ровно один раз.
+// ACK_TTL — окно идемпотентности в секундах (покрывает 3 ретрая × ~11 с).
+
+if (!defined('ACTION_ACK_TTL')) {
+    define('ACTION_ACK_TTL', 60);
+}
+
+/**
+ * Проверить, применено ли действие с таким action_id ранее.
+ * @return array|null ['success'=>bool,'message'=>string,'version'=>int]|null — null если id неизвестен
+ */
+function world_action_ack_get($player_id, $action_id) {
+    if ($action_id === null || $action_id === '') return null;
+    try {
+        $raw = getRedis()->hGet(REDIS_ACTION_ACKS, $player_id . '|' . $action_id);
+    } catch (Throwable $e) {
+        return null; // хранилище недоступно — считаем, что повтора нет (валидация глагола защитит от дублей по состоянию)
+    }
+    if (!$raw) return null;
+    $ack = json_decode($raw, true);
+    if (!is_array($ack)) return null;
+    if (time() - (int)($ack['ts'] ?? 0) > ACTION_ACK_TTL) return null; // устарело
+    return $ack;
+}
+
+/**
+ * Записать подтверждение применённого действия (после успешного world_save).
+ */
+function world_action_ack_set($player_id, $action_id, $payload) {
+    if ($action_id === null || $action_id === '') return;
+    $payload['ts'] = time();
+    try {
+        $redis = getRedis();
+        $key = $player_id . '|' . $action_id;
+        $redis->hSet(REDIS_ACTION_ACKS, $key, json_encode($payload));
+        $redis->expire(REDIS_ACTION_ACKS, ACTION_ACK_TTL);
+        // Компакция: журнал не должен расти бесконечно внутри окна TTL
+        if ($redis->hLen(REDIS_ACTION_ACKS) > 2000) {
+            $redis->del(REDIS_ACTION_ACKS);
+            $redis->hSet(REDIS_ACTION_ACKS, $key, json_encode($payload));
+            $redis->expire(REDIS_ACTION_ACKS, ACTION_ACK_TTL);
+        }
+    } catch (Throwable $e) {
+        // Не удаётся подтвердить — клиент ретраит; повтор может удвоить действие.
+        // Штатная валидация глагола (MOVING/ACTIONS/STUNNED) отклонит дубль,
+        // поэтому потеря ack безопаснее потери самого действия.
+    }
 }
