@@ -78,7 +78,7 @@
 | `rules.php` | **Единый источник констант мира** (GRID 16×12, MAX_MOVE_DISTANCE=5, MOVE_SPEED=3, TURN_DURATION=5, SHIELD_REGEN_PER_TURN=1, LONG_POLL_TIMEOUT=25, тайминги анимаций) через guard `if (!defined(...)) define(...)` — порядок загрузки файлов не может уронить процесс | `rules_turn_formula()` (канон направления спрайта TURN), `rules_client_payload()` (правила в ответах init/poll) |
 | `geometry.php` | Чистые функции координат, без состояния | `parseXY/formatXY/isValidPosition/manhattan/inRadius/calculatePath/adjacentCells/cellsInRadius/directionStep` |
 | `events.php` | Шина событий: `hook(event, fn, priority)` с детерминированным порядком, `emit()` (fact-события), `emitReduce()` (query/reduser-события; **payload передаётся по ссылке** — слушатели мутируют оригинал, а не копию). Канонический список событий — в шапке файла | `hook()`, `emit()`, `emitReduce()` |
-| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии) | `world_load/world_save/world_init/world_log/world_version`; константа ключа `REDIS_WORLD_MOVE_NOW` определяется здесь |
+| `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии); журнал ack для идемпотентности действий — hash `battle:action_acks` | `world_load/world_save/world_init/world_log/world_version`, `world_action_ack_get/set` (ретраи `action.php` отдают сохранённое подтверждение вместо повторного применения); константа ключа `REDIS_WORLD_MOVE_NOW` определяется здесь |
 | `turn.php` | Оркестратор тика хода: movement → death chain → projectiles → attack reset → npc statuses → effects tick; самовосстанавливающийся инвариант STATUS↔NEGATIVES (снятие истёкших дебаффов, в т.ч. STUNNED); защита от `turn_time=0` | `turn_tick()` (вызывается каждым poll-запросом), `turn_check_advance()`, `turn_start()` (ACTIONS/shield regen + emit `turn.start`) |
 | `bootstrap.php` | Точка сборки: require всех систем + регистрация слушателей в фиксированном порядке (combat → passives → effects → movement → objects → turn) + `engine_check_victory` | `*::register_hooks()` вызываются отсюда |
 
@@ -96,7 +96,7 @@
 
 ### Клиент (`js/game.js`, ~1360 строк, vanilla JS)
 
-- `CONFIG.PHP_URL = 'php/'`, сетка 16×12, `CELL_SIZE=40` (дублирует серверные константы — см. §7).
+- `CONFIG.PHP_URL = 'php/'`, сетка 16×12 (`GRID_WIDTH/HEIGHT`), `CELL_SIZE=40` (дублирует серверные константы — см. §7; скорости клиента в `CONFIG` нет — анимация движения строится на временах хода `MOVE_START/END_TIME` из snapshot).
 - Жизненный цикл: выбор PLAYER* → `initGame()` (fetch `init.php`) → `startPolling()` → бесконечный
   цикл `poll()` (`poll.php?v=<version>&player=<ID>`, следующий запрос через 100 мс после ответа,
   retry через 2 c при ошибке).
@@ -139,13 +139,18 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 
 | Событие | Вид | Кто эмитит | Кто слушает |
 |---|---|---|---|
-| `damage.query_mitigate` | query (payload by-ref) | combat_apply_damage | passives (ARMORED ÷2 от ARMOR_CRUSH-атак, ARMOR_CRUSH pierce), combat (RESISTANCE) |
+| `damage.query_mitigate` | query (payload by-ref) | combat_apply_damage | passives (ARMORED ÷2 от pierce-атак), combat (RESISTANCE; ARMOR_CRUSH pierce читается напрямую через `combat_should_pierce_resistance`) |
 | `damage.dealt` | fact | combat_apply_damage | combat (прерывание MOVING при реальном уроне, p0), passives (THORNS, p10) |
+| `entity.died` | fact | combat_apply_damage (HP ≤ 0 → STATUS='DEATH') | death-chain, логи |
 | `attack.resolved` | fact | processAttack | passives (SPLASH) |
 | `effect.applied` | fact | effects_apply | effects (немедленная активация CC) |
 | `movement.query_block` | query | movement | effects (CC-блокировки) |
-| `movement.query_distance` | query | movement | passives (SWIFT/SLOWED) |
+| `movement.query_distance` | query | movement | passives (SWIFT), passives-адаптер эффектов SLOWED (p10, читает `effects_get_modifier`) |
+| `movement.interrupted` | fact | combat (прерывание при реальном уроне) | movement (остановка на текущей клетке) |
 | `turn.start` | fact | turn_start | turn (effects tick, p5), combat, passives (REGENERATION), objects (NPC actions reset + threat, p20) |
+
+Зарезервированы в каноническом списке шапки `events.php`, но слушателей пока нет:
+`trap.triggered`, `threat.entered`, `tick.server`, `victory.check`.
 
 Правила зависимостей (жесткие):
 - Эндпоинты требуют **только** `engine/bootstrap.php` (battle.php — фасад для legacy-имён).
@@ -167,7 +172,8 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
    (`LONG_POLL_TIMEOUT`, `set_time_limit` снят), каждые 0.1 с: `world_load` → `turn_tick($state)`
    (**для любого запроса, даже без `?player=`** — иначе эффекты залипают) → движение по «виртуальным
    часам мира» с догоняющими тиками → death chain → projectiles → attack reset → npc statuses →
-   effects tick → при `now-turn_time ≥ TURN_DURATION(5)` новый ход (`turn_check_advance` →
+   effects tick (внутри хода) → пересчёт зон угрозы NPC после фазы движения
+   (`objects_refresh_threat_zones`) → при `now-turn_time ≥ TURN_DURATION(5)` новый ход (`turn_check_advance` →
    `turn_start` + emit `turn.start`: passives/effects/combat/objects-слушатели) → `world_save`
    (incr version централизован в world_save; дедуп записей). Если version изменилась, отдаёт
    **полный flat snapshot**
@@ -186,7 +192,9 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 
 `players`, `objects`, `traps`, `npcs`, `room`, `turn_time`, `projectiles`, `version`, `log`
 (последние 50 записей; клиенту отдаются последние 30), `world_move_now` (виртуальные часы
-движения, float-микровремя; обновляется каждый тик без инкремента версии). Значения секций —
+движения, float-микровремя; обновляется каждый тик без инкремента версии), `action_acks`
+(hash журнал подтверждений применённых действий для идемпотентности retry-запросов из
+`action.php`; TTL `ACTION_ACK_TTL`, компакция при >2000 записей). Значения секций —
 JSON-строки, version/turn_time — int.
 
 ### Конкурентность (важно знать перед правками)
@@ -230,7 +238,8 @@ JSON-строки, version/turn_time — int.
 - **Способности**: 4 механизма `projectile`: `none` (instant/self_buff/ally_buff), `beam`, `line`,
   `area(aoe)`; типы physical/fire/ice/poison; эффекты `ЭФФЕКТ[ходы]`: FROZEN, POISONED, BLEED,
   STUNNED, SLOWED, BLINDED. Снаряды-визуализации живут в `projectiles` с фазами cast→hit→done
-  (1+1 сек, чистит `updateProjectiles`).
+  (1 сек каст + 2 сек полёт/попадание, чистит `turn_update_projectiles`; legacy-фасад
+  `updateProjectiles` в battle.php делегирует ему).
 - **TURN (LEFT/RIGHT)**: сервер переписывает при горизонтальном move/attack/ability; вертикаль и
   самоприменение не меняют. Клиент зеркалит через `scaleX(-1)` (класс `turn-left`). Правило CSS:
   новые keyframes либо только filter/box-shadow, либо домножение transform на
@@ -272,7 +281,7 @@ HTTP code). `error_reporting(0)` в config.php — **ошибки PHP в stdout 
 GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_REGEN_PER_TURN=1`,
 `LONG_POLL_TIMEOUT=25`; префикс `battle:` живёт в `engine/world.php`. В `config.php` игровых
 констант больше нет (исторический конфликт двойного определения → fatal 500, не возвращать).
-Клиент: `CONFIG` в `js/game.js` (GRID_*, CELL_SIZE, MOVE_SPEED) + `css/game.css` (размер клетки) —
+Клиент: `CONFIG` в `js/game.js` (GRID_*, CELL_SIZE) + `css/game.css` (размер клетки) —
 **при изменении сетки/скоростей синхронизировать вручную**; сервер отдаёт те же значения в поле
 `rules` ответов, но game.js их пока не читает (открытая задача миграции).
 Также дублируется формула TURN (`previewTurn()` ↔ `rules_turn_formula()`) — менять одновременно.
