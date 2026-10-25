@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Диагностика Battle System</title>
+    <style>
+        body { font-family: monospace; background: #1a1a2e; color: #eee; padding: 20px; }
+        .check { padding: 10px; margin: 5px 0; border-radius: 5px; }
+        .ok { background: #1b4332; border-left: 4px solid #4ecca3; }
+        .fail { background: #4a1c1c; border-left: 4px solid #e94560; }
+        .info { background: #16213e; border-left: 4px solid #ffd93d; }
+        pre { background: #0a0a1a; padding: 10px; border-radius: 4px; overflow: auto; }
+        h1 { color: #e94560; }
+        h2 { color: #4ecca3; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Диагностика Battle System</h1>
+    <p>Эта страница проверяет работоспособность компонентов.</p>
+    
+    <div id="results"></div>
+    
+    <h2>Ручные тесты</h2>
+    <ul>
+        <li><a href="php/init.php" target="_blank">init.php</a> - инициализация боя</li>
+        <li><a href="php/poll.php?v=0&player=PLAYER1" target="_blank">poll.php</a> - long polling (откроется с задержкой)</li>
+    </ul>
+    
+    <script>
+        const results = document.getElementById('results');
+        
+        function addResult(status, title, details) {
+            const div = document.createElement('div');
+            div.className = 'check ' + status;
+            div.innerHTML = '<strong>' + (status === 'ok' ? '✅' : status === 'fail' ? '❌' : 'ℹ️') + ' ' + title + '</strong>';
+            if (details) {
+                const pre = document.createElement('pre');
+                pre.textContent = typeof details === 'string' ? details : JSON.stringify(details, null, 2);
+                div.appendChild(pre);
+            }
+            results.appendChild(div);
+        }
+        
+        async function checkEndpoint(url, name) {
+            try {
+                const resp = await fetch(url);
+                const text = await resp.text();
+                
+                if (!resp.ok) {
+                    addResult('fail', name + ' - HTTP ' + resp.status, text.substring(0, 500));
+                    return null;
+                }
+                
+                try {
+                    const json = JSON.parse(text);
+                    addResult('ok', name + ' - OK', json);
+                    return json;
+                } catch (e) {
+                    addResult('fail', name + ' - не JSON', 'Ответ сервера: ' + text.substring(0, 500));
+                    return null;
+                }
+            } catch (err) {
+                addResult('fail', name + ' - ошибка сети', err.message);
+                return null;
+            }
+        }
+        
+        async function runChecks() {
+            addResult('info', 'Текущий URL', window.location.href);
+            addResult('info', 'PHP URL', 'php/');
+            
+            // Проверяем init.php
+            const initData = await checkEndpoint('php/init.php', 'init.php (инициализация)');
+            
+            if (initData && initData.success) {
+                // Проверяем poll.php
+                await checkEndpoint('php/poll.php?v=0&player=PLAYER1', 'poll.php (long polling)');
+                
+                // Проверяем action.php
+                try {
+                    const resp = await fetch('php/action.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'move', player: 'PLAYER1', x: 3, y: 1 })
+                    });
+                    const text = await resp.text();
+                    try {
+                        const json = JSON.parse(text);
+                        addResult('ok', 'action.php - OK', json);
+                    } catch (e) {
+                        addResult('fail', 'action.php - не JSON', text.substring(0, 500));
+                    }
+                } catch (err) {
+                    addResult('fail', 'action.php - ошибка сети', err.message);
+                }
+                
+                addResult('ok', 'ВСЁ РАБОТАЕТ!', 'Можете переходить на game.html');
+            } else {
+                addResult('fail', 'Проблемы с подключением', 'Проверьте что Redis запущен и PHP имеет расширение Redis');
+            }
+        }
+        
+        runChecks();
+    </script>
+</body>
+</html>
