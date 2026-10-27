@@ -264,10 +264,12 @@ function movement_update_step(&$state, $now) {
                 }
             }
 
-            // Выход из комнаты (заглушка — переходы между комнатами не реализованы)
-            $room_key = formatXY($new_pos['x'], $new_pos['y']);
-            if (isset($state['room']['exits'][$room_key])) {
-                $state = world_log($state, $pid . ' переходит в комнату ' . $state['room']['exits'][$room_key]);
+            // ★ Триггер exit: игрок «наступил» на дверь — переход в другую
+            // комнату (тот же принцип, что LAND_MINE). Дверь постоянна и не
+            // исчезает после срабатывания. Если перенос выполнен — дальнейшая
+            // обработка финала этой клетки не нужна (позиция/комната заменены).
+            if ($player['STATUS'] !== 'DEATH' && $player['STATUS'] !== 'DECAY') {
+                rooms_check_exit_trigger($state, $pid, $new_pos['x'], $new_pos['y']);
             }
         } else {
             // ── Плавное перемещение по серверным часам ──

@@ -29,6 +29,7 @@ require_once __DIR__ . '/../systems/movement.php';
 require_once __DIR__ . '/../systems/combat.php';
 require_once __DIR__ . '/../systems/abilities.php';
 require_once __DIR__ . '/../systems/objects.php';
+require_once __DIR__ . '/../systems/rooms.php';
 require_once __DIR__ . '/turn.php';
 
 if (!defined('ENGINE_BOOTSTRAPPED')) {

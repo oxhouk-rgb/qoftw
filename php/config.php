@@ -26,6 +26,11 @@ if (!defined('REDIS_OBJECTS')) define('REDIS_OBJECTS', REDIS_PREFIX . 'objects')
 if (!defined('REDIS_TRAPS')) define('REDIS_TRAPS', REDIS_PREFIX . 'traps');
 if (!defined('REDIS_NPCS')) define('REDIS_NPCS', REDIS_PREFIX . 'npcs');
 if (!defined('REDIS_ROOM')) define('REDIS_ROOM', REDIS_PREFIX . 'room');
+// Мультикомнатный мир: комнаты грузятся лениво из data/<ID>.json (см.
+// systems/rooms.php), поэтому в Redis физически лежат только реально
+// использованные комнаты — по ключу room:<ID>. REDIS_ROOM сохранён для
+// legacy-режима единой карты (state['room']).
+if (!defined('REDIS_ROOM_KEY_PREFIX')) define('REDIS_ROOM_KEY_PREFIX', REDIS_PREFIX . 'room:');
 if (!defined('REDIS_TURN_TIME')) define('REDIS_TURN_TIME', REDIS_PREFIX . 'turn_time');
 if (!defined('REDIS_PROJECTILES')) define('REDIS_PROJECTILES', REDIS_PREFIX . 'projectiles');
 if (!defined('REDIS_VERSION')) define('REDIS_VERSION', REDIS_PREFIX . 'version');
@@ -122,9 +127,13 @@ if (!function_exists('getBattleState')) {
         $pipe->get(REDIS_PROJECTILES);
         $pipe->get(REDIS_VERSION);
         $pipe->get(REDIS_LOG);
+        // Мультикомнатный мир: список «распакованных» комнат + их JSON-карты.
+        // Комнаты грузятся лениво из data/*.json; в Redis лежат только реально
+        // использованные — масштаб 25 помещений не раздувает состояние.
+        $pipe->get(REDIS_ROOM_KEY_PREFIX . 'list');
         $results = $pipe->exec();
     
-        return [
+        $state = [
             'players' => json_decode($results[0], true) ?: [],
             'objects' => json_decode($results[1], true) ?: [],
             'traps' => json_decode($results[2], true) ?: [],
@@ -133,8 +142,24 @@ if (!function_exists('getBattleState')) {
             'turn_time' => (int)$results[5],
             'projectiles' => json_decode($results[6], true) ?: [],
             'version' => (int)$results[7],
-            'log' => json_decode($results[8], true) ?: []
+            'log' => json_decode($results[8], true) ?: [],
+            'rooms' => [],
         ];
+
+        $room_list = json_decode((string)($results[9] ?? ''), true) ?: [];
+        if (!empty($room_list)) {
+            $pipe2 = getRedis()->multi(Redis::PIPELINE);
+            foreach ($room_list as $rid) {
+                $pipe2->get(REDIS_ROOM_KEY_PREFIX . $rid);
+            }
+            $room_jsons = $pipe2->exec();
+            foreach ($room_list as $i => $rid) {
+                $decoded = json_decode((string)($room_jsons[$i] ?? ''), true);
+                if (is_array($decoded)) $state['rooms'][$rid] = $decoded;
+            }
+        }
+
+        return $state;
     }
 }
 
@@ -152,6 +177,12 @@ if (!function_exists('saveBattleState')) {
         $pipe->set(REDIS_PROJECTILES, json_encode($state['projectiles']));
         $pipe->incr(REDIS_VERSION);
         $pipe->set(REDIS_LOG, json_encode($state['log']));
+        // Комнаты: пишем только реально используемые (см. getBattleState выше).
+        $rooms = $state['rooms'] ?? [];
+        $pipe->set(REDIS_ROOM_KEY_PREFIX . 'list', json_encode(array_keys($rooms)));
+        foreach ($rooms as $rid => $rdata) {
+            $pipe->set(REDIS_ROOM_KEY_PREFIX . $rid, json_encode($rdata));
+        }
         $pipe->exec();
     }
 }
