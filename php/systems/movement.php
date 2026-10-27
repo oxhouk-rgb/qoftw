@@ -37,6 +37,22 @@ function engine_active_room($state, $room_id = null) {
 }
 
 /**
+ * ★ Эффективная дальность хода игрока: базовая MAX_MOVE_DISTANCE со всеми
+ * модификаторами шины (SWIFT +value, SLOWED −value; floor 1 — как в
+ * movement_process_move). Единая точка расчёта: её используют и серверная
+ * валидация хода, и poll-ответ (поле players[].MOVE_RANGE), чтобы клиентская
+ * подсветка движения НЕ дублила формулу модификаторов (баг «подсветка
+ * игнорирует SWIFT/SLOWED»).
+ */
+function movement_effective_range($state, $player_id) {
+    $dist_query = emitReduce($state, 'movement.query_distance', [
+        'player_id' => $player_id,
+        'distance' => MAX_MOVE_DISTANCE,
+    ]);
+    return max(1, $dist_query['distance']);
+}
+
+/**
  * Начать перемещение игрока (валидация + предсказание пути + очередь анимации).
  * @return array ['success'=>bool,'message'=>string,...]
  */
@@ -58,11 +74,8 @@ function movement_process_move(&$state, $player_id, $target_x, $target_y) {
     }
 
     // Дальность хода — базовая константа + редукция слушателями шины
-    $dist_query = emitReduce($state, 'movement.query_distance', [
-        'player_id' => $player_id,
-        'distance' => MAX_MOVE_DISTANCE,
-    ]);
-    $max_move = max(1, $dist_query['distance']);
+    // (единая формула с poll-ответом MOVE_RANGE — см. movement_effective_range)
+    $max_move = movement_effective_range($state, $player_id);
 
     $distance = manhattan($cur_pos['x'], $cur_pos['y'], $target_x, $target_y);
     if ($distance > $max_move) {
