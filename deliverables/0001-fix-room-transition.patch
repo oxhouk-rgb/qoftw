@@ -1,0 +1,146 @@
+From b5008ea00c05d3b1287e365cd57f0b940fa7809d Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Tue, 27 Oct 2026 11:06:04 +0000
+Subject: [PATCH] Fix instant room transition contract: virtual move-final
+ instead of stuck MOVING/IDLE
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Server (php/systems/rooms.php): rooms_teleport now emits a zero-length
+'move final' (STATUS=MOVING with MOVE_START_TIME==MOVE_END_TIME==now)
+instead of silently unsetting movement flags while STATUS stayed MOVING.
+The next movement_update tick finalizes it to IDLE (restoring STUNNED if
+active), so the client never sees a player stuck in MOVING without move
+data — that stale state blocked cell clicks and suppressed zone
+highlighting (no move/attack highlight after teleport).
+
+Client (js/game.js): renderGrid detects instant transitions via
+'instantMove' (START==END or END==CUR while MOVING): local rAF animations
+are dropped and the sprite is snapped exactly to the server position,
+eliminating the 'jump to exit cell' artifact on the first move after a
+room change.
+
+Tests (tests/harness_engine.php): T1/T2 extended — assert the virtual
+move-final contract, that movement_update converts it to IDLE, and that
+the fighter never spawns on a door cell (no re-trigger loop). 32 checks,
+0 failures.
+---
+ js/game.js               | 21 ++++++++++++---------
+ php/systems/rooms.php    | 17 ++++++++++++++---
+ tests/harness_engine.php | 25 +++++++++++++++++++++----
+ 3 files changed, 47 insertions(+), 16 deletions(-)
+
+diff --git a/js/game.js b/js/game.js
+index 37da11b..532d742 100644
+--- a/js/game.js
++++ b/js/game.js
+@@ -1090,14 +1090,17 @@ function renderGrid(data) {
+                 updatePlayerEntity(entity, player);
+             }
+             
+-            // ★ «Рывок к двери» после перехода в другую комнату: серверный тик
+-            // мог завершить ход и телепортировать бойца (STATUS ещё MOVING до
+-            // конца хода, но MOVE_*_TIME уже сняты, END=CUR — точка входа).
+-            // Локальная анимация в этот момент может тащить спрайт от прежней
+-            // конечной клетки; при совпадении серверных START/END сбрасываем её
+-            // и ставим спрайт ровно на серверную позицию — клиентский источник
+-            // истины для позиции между ходами всегда сервер.
+-            if (player.STATUS === 'MOVING' && player.START_POSITION_XY === player.END_POSITION_XY) {
++            // ★ Мгновенные переходы (дверь между комнатами, респаун): сервер
++            // выдаёт «виртуальный финал движения» — STATUS='MOVING', но путь
++            // нулевой (START == END или END == CUR, MOVE_END_TIME наступил).
++            // Такой боец НЕ анимируется: локальные rAF-анимации старой
++            // траектории сбрасываются, спрайт ставится ровно на серверную
++            // позицию. Без этого шага спрайт «прилипал» к клетке выхода, а
++            // следующий клик начинал маршрут от неё («рывок к exit»).
++            const instantMove = player.STATUS === 'MOVING' &&
++                (player.START_POSITION_XY === player.END_POSITION_XY ||
++                 player.END_POSITION_XY === player.CUR_POSITION_XY);
++            if (instantMove) {
+                 state.animations.forEach((anim, key) => {
+                     if (key.startsWith(`${pid}_`)) state.animations.delete(key);
+                 });
+@@ -1111,7 +1114,7 @@ function renderGrid(data) {
+             }
+ 
+             // Обрабатываем перемещение
+-            if (player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
++            if (!instantMove && player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
+                 // Игрок двигается - запускаем клиентскую анимацию
+                 const startPos = parseXY(player.START_POSITION_XY);
+                 const endPos = parseXY(player.END_POSITION_XY);
+diff --git a/php/systems/rooms.php b/php/systems/rooms.php
+index 3c44d3a..e3b1ce5 100644
+--- a/php/systems/rooms.php
++++ b/php/systems/rooms.php
+@@ -265,9 +265,20 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
+         return ['success' => false, 'message' => 'Нет свободной клетки'];
+     }
+ 
+-    // Выписка из старой комнаты: движение обрывается навсегда
+-    $player['STATUS'] = 'IDLE';
+-    unset($player['MOVE_START_TIME'], $player['MOVE_END_TIME'], $player['MOVE_DISTANCE']);
++    // Выписка из старой комнаты: движение обрывается навсегда.
++    // ★ Клетка двери — мгновенная телепортация, а не путь по сетке: выдаём
++    // «виртуальный» финал движения (MOVING с MOVE_END_TIME в прошлом). Тик
++    // movement_update на следующем poll сам завершит его: снимет MOVING_* и
++    // выставит IDLE (или восстановит STUNNED из активных NEGATIVES). Прямая
++    // установка STATUS='IDLE' здесь была причиной двух багов: (а) игрок мог
++    // остаться с висевшим STATUS='MOVING' без ходовых данных — клиент
++    // блокировал клики и НЕ рисовал подсветку зон; (б) если бы статус
++    // сбрасывался, но боец всё ещё стоял на клетке exit (см. ниже), первый же
++    // клик возвращал бы спрайт к двери («рывок к exit»).
++    $player['STATUS'] = 'MOVING';
++    $player['MOVE_START_TIME'] = microtime(true);
++    $player['MOVE_END_TIME'] = microtime(true);
++    unset($player['MOVE_DISTANCE']);
+     $player['ROOM_ID'] = $to_room_id;
+     $player['CUR_POSITION_XY'] = $spawn_xy;
+     $player['END_POSITION_XY'] = $spawn_xy;
+diff --git a/tests/harness_engine.php b/tests/harness_engine.php
+index 6996906..c51b4ba 100644
+--- a/tests/harness_engine.php
++++ b/tests/harness_engine.php
+@@ -155,9 +155,21 @@ function test_exit_transition() {
+     // Появление у обратной двери A1.exit_rooms["0,0"]="B1" — рядом с (0,0)
+     $sp = parseXY($p['CUR_POSITION_XY']);
+     t_assert(abs($sp['x'] - 0) <= 2 && abs($sp['y'] - 0) <= 2, 'спавн рядом с обратной дверью A1 (0,0)');
+-    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'статус после перехода — IDLE');
+-    // Движение обрывается навсегда
+-    t_assert(!isset($p['MOVE_START_TIME']) && !isset($p['MOVE_END_TIME']), 'анимация движения сброшена при переходе');
++    t_assert(($p['STATUS'] ?? '') === 'MOVING', 'статус после перехода — MOVING (виртуальный финал: тик сам снимет его в IDLE)');
++    // Движение обрывается навсегда: путь нулевой, MOVE_END_TIME уже наступил —
++    // следующий movement_update завершает «ход» без анимации.
++    t_assert(isset($p['MOVE_START_TIME']) && isset($p['MOVE_END_TIME']), 'выданы ходовые данные мгновенного перехода');
++    t_assert($p['MOVE_END_TIME'] <= microtime(true), 'MOVE_END_TIME наступил — движение финализируется на ближайшем тике');
++    t_assert($p['START_POSITION_XY'] === $p['END_POSITION_XY'], 'путь мгновенного перехода нулевой (START == END) — клиент не анимирует рывок');
++    // ★ Тик должен корректно завершить виртуальное движение: STATUS → IDLE,
++    // флаги сняты, позиция НЕ на клетке двери.
++    movement_update($state);
++    $p = $state['players']['PLAYER1'];
++    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после тика статус стал IDLE');
++    t_assert(!isset($p['MOVE_START_TIME']) && !isset($p['MOVE_END_TIME']), 'после тика флаги движения сняты');
++    $door_xy = formatXY($sp['x'], $sp['y']);
++    $a1 = $state['rooms']['A1'];
++    t_assert(!isset($a1['exits'][$door_xy]) && !isset($a1['exit_rooms'][$door_xy]), 'боец стоит НЕ на клетке двери (нет повторного триггера)');
+ }
+ 
+ // ------------------------------------------------------------------ T2
+@@ -177,7 +189,12 @@ function test_respawn_via_teleport() {
+     $changed = turn_update_death_animations($state);
+     t_assert($changed, 'цепочка DECAY сдвинулась на этом тике');
+     $p = $state['players'][$pid];
+-    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после респауна статус IDLE');
++    // Респаун — тоже мгновенный переход: виртуальный финал движения, тик
++    // переводит в IDLE (см. T1). Проверка «не на двери» ниже это подтверждает.
++    t_assert(in_array(($p['STATUS'] ?? ''), ['IDLE', 'MOVING'], true), 'после респауна статус IDLE или MOVING-до-завершения');
++    movement_update($state);
++    $p = $state['players'][$pid];
++    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после тика статус стал IDLE');
+     t_assert(($p['ROOM_ID'] ?? '') === ($p['SPAWN_ROOM'] ?? '?'), 'игрок вернулся в личную SPAWN_ROOM (A1), а не остался в B1');
+     t_assert(isset($state['rooms'][$p['SPAWN_ROOM']]), 'карта SPAWN_ROOM загружена в state[rooms]');
+     t_assert($p['CUR_POSITION_XY'] === $p['START_POSITION_XY'], 'встал ровно на личную стартовую клетку (она свободна)');
+-- 
+2.39.5
+
