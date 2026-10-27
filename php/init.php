@@ -41,9 +41,20 @@ try {
         jsonError('Ошибка парсинга JSON в battledata.json или отсутствует секция "players": ' . json_last_error_msg());
     }
 
-    // Комната берётся из ROOM_ID первого игрока (карта одна для всех участников)
+    // ★ Мультикомнатный мир: battledata.json описывает бойцов в их стартовых
+    // комнатах (A1/A5/E1/E5), но общий центр боя — B1 (бочки/мины/турель).
+    // state['room'] — legacy-карта единой карты (её читают debug-эндпоинты и
+    // вызовы без room_id); берём её из комнаты с объектами/ловушками/NPC, а
+    // при отсутствии таких — из первой player-комнаты.
+    $entity_room = null;
+    foreach (['objects', 'traps', 'npcs'] as $sec) {
+        foreach (($battle_data[$sec] ?? []) as $edata) {
+            if (!empty($edata['ROOM_ID'])) { $entity_room = $edata['ROOM_ID']; break 2; }
+        }
+    }
     $first_player = reset($battle_data['players']);
-    $room_id = $first_player['ROOM_ID'] ?? '';
+    $legacy_room_id = $entity_room ?: ($first_player['ROOM_ID'] ?? '');
+    $room_id = $legacy_room_id;
     if ($room_id === '') {
         jsonError('В battledata.json у игроков отсутствует ROOM_ID');
     }
@@ -169,6 +180,11 @@ try {
 
     $state = [
         'room' => $room_data,
+        // ★ Мультикомнатный словарь: кладём legacy-комнату (в ней объекты/
+        // ловушки/NPC) и стартовые комнаты всех игроков — иначе poll для игрока
+        // в A1 получил бы null-карту до первого телепорта (движок терпит null,
+        // но клиенту показывать нечего). Остальные комнаты грузятся лениво.
+        'rooms' => [],
         'objects' => $objects,
         'traps' => $traps,
         'npcs' => $npcs,
@@ -177,10 +193,22 @@ try {
         'log' => [],
         'turn_time' => time(),
     ];
+    $initial_rooms = array_unique(array_filter(
+        array_merge([$legacy_room_id], array_column($players, 'ROOM_ID'))
+    ));
+    foreach ($initial_rooms as $rid) {
+        $card = room_get($state, $rid);
+        if ($card !== null) $state['rooms'][$rid] = $card;
+    }
 
-    // Зоны угрозы NPC (нужны предсказанию движения)
+    // Зоны угрозы NPC (нужны предсказанию движения) — карты комнат уже в state
     foreach ($state['npcs'] as $npc_id => &$npc) {
         if ($npc['STATUS'] !== 'DESTROYED' && $npc['STATUS'] !== 'DEATH') {
+            $nroom = $npc['ROOM_ID'] ?? null;
+            if ($nroom !== null && $nroom !== '' && !isset($state['rooms'][$nroom])) {
+                $card = room_get($state, $nroom);
+                if ($card !== null) $state['rooms'][$nroom] = $card;
+            }
             $npc['THREAT_ZONE'] = calculateThreatZone($state, $npc_id);
             $state = world_log($state, "NPC {$npc_id}: зона угрозы вычислена (" . count($npc['THREAT_ZONE']) . " клеток)");
         }

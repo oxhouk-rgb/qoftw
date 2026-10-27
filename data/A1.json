@@ -226,5 +226,8 @@
   "exit_positions": {
     "0,0": "1,1"
   },
-  "stairs": {}
+  "stairs": {},
+  "exit_rooms": {
+    "0,0": "B1"
+  }
 }
