@@ -4,7 +4,7 @@
       "NICKNAME": "PLAYER1",
       "CHAR_ID": "NAPALM UNIT",
       "ALLY": "PLAYER2",
-      "ROOM_ID": "B1",
+      "ROOM_ID": "A1",
       "START_POSITION_XY": "1,1",
       "CUR_POSITION_XY": "1,1",
       "END_POSITION_XY": "1,1",
@@ -29,14 +29,14 @@
       ],
       "NEGATIVES": [],
       "LIFE": 1,
-      "SPAWN_ROOM": "SPAWN",
+      "SPAWN_ROOM": "A1",
       "COLOR": "#ff4444"
     },
     "PLAYER2": {
       "NICKNAME": "PLAYER2",
       "CHAR_ID": "FROST KNIGHT",
       "ALLY": "PLAYER1",
-      "ROOM_ID": "B1",
+      "ROOM_ID": "A5",
       "START_POSITION_XY": "14,1",
       "CUR_POSITION_XY": "14,1",
       "END_POSITION_XY": "14,1",
@@ -64,14 +64,14 @@
       ],
       "NEGATIVES": [],
       "LIFE": 1,
-      "SPAWN_ROOM": "SPAWN",
+      "SPAWN_ROOM": "A5",
       "COLOR": "#4444ff"
     },
     "PLAYER3": {
       "NICKNAME": "PLAYER3",
       "CHAR_ID": "SHADOW ROGUE",
       "ALLY": "NONE",
-      "ROOM_ID": "B1",
+      "ROOM_ID": "E1",
       "START_POSITION_XY": "1,10",
       "CUR_POSITION_XY": "1,10",
       "END_POSITION_XY": "1,10",
@@ -97,14 +97,14 @@
       ],
       "NEGATIVES": [],
       "LIFE": 1,
-      "SPAWN_ROOM": "SPAWN",
+      "SPAWN_ROOM": "E1",
       "COLOR": "#44ff44"
     },
     "PLAYER4": {
       "NICKNAME": "PLAYER4",
       "CHAR_ID": "IRON GUARD",
       "ALLY": "NONE",
-      "ROOM_ID": "B1",
+      "ROOM_ID": "E5",
       "START_POSITION_XY": "14,10",
       "CUR_POSITION_XY": "14,10",
       "END_POSITION_XY": "14,10",
@@ -131,7 +131,7 @@
       ],
       "NEGATIVES": [],
       "LIFE": 1,
-      "SPAWN_ROOM": "SPAWN",
+      "SPAWN_ROOM": "E5",
       "COLOR": "#ffaa00"
     }
   },
