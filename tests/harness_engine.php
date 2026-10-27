@@ -155,9 +155,21 @@ function test_exit_transition() {
     // Появление у обратной двери A1.exit_rooms["0,0"]="B1" — рядом с (0,0)
     $sp = parseXY($p['CUR_POSITION_XY']);
     t_assert(abs($sp['x'] - 0) <= 2 && abs($sp['y'] - 0) <= 2, 'спавн рядом с обратной дверью A1 (0,0)');
-    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'статус после перехода — IDLE');
-    // Движение обрывается навсегда
-    t_assert(!isset($p['MOVE_START_TIME']) && !isset($p['MOVE_END_TIME']), 'анимация движения сброшена при переходе');
+    t_assert(($p['STATUS'] ?? '') === 'MOVING', 'статус после перехода — MOVING (виртуальный финал: тик сам снимет его в IDLE)');
+    // Движение обрывается навсегда: путь нулевой, MOVE_END_TIME уже наступил —
+    // следующий movement_update завершает «ход» без анимации.
+    t_assert(isset($p['MOVE_START_TIME']) && isset($p['MOVE_END_TIME']), 'выданы ходовые данные мгновенного перехода');
+    t_assert($p['MOVE_END_TIME'] <= microtime(true), 'MOVE_END_TIME наступил — движение финализируется на ближайшем тике');
+    t_assert($p['START_POSITION_XY'] === $p['END_POSITION_XY'], 'путь мгновенного перехода нулевой (START == END) — клиент не анимирует рывок');
+    // ★ Тик должен корректно завершить виртуальное движение: STATUS → IDLE,
+    // флаги сняты, позиция НЕ на клетке двери.
+    movement_update($state);
+    $p = $state['players']['PLAYER1'];
+    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после тика статус стал IDLE');
+    t_assert(!isset($p['MOVE_START_TIME']) && !isset($p['MOVE_END_TIME']), 'после тика флаги движения сняты');
+    $door_xy = formatXY($sp['x'], $sp['y']);
+    $a1 = $state['rooms']['A1'];
+    t_assert(!isset($a1['exits'][$door_xy]) && !isset($a1['exit_rooms'][$door_xy]), 'боец стоит НЕ на клетке двери (нет повторного триггера)');
 }
 
 // ------------------------------------------------------------------ T2
@@ -177,7 +189,12 @@ function test_respawn_via_teleport() {
     $changed = turn_update_death_animations($state);
     t_assert($changed, 'цепочка DECAY сдвинулась на этом тике');
     $p = $state['players'][$pid];
-    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после респауна статус IDLE');
+    // Респаун — тоже мгновенный переход: виртуальный финал движения, тик
+    // переводит в IDLE (см. T1). Проверка «не на двери» ниже это подтверждает.
+    t_assert(in_array(($p['STATUS'] ?? ''), ['IDLE', 'MOVING'], true), 'после респауна статус IDLE или MOVING-до-завершения');
+    movement_update($state);
+    $p = $state['players'][$pid];
+    t_assert(($p['STATUS'] ?? '') === 'IDLE', 'после тика статус стал IDLE');
     t_assert(($p['ROOM_ID'] ?? '') === ($p['SPAWN_ROOM'] ?? '?'), 'игрок вернулся в личную SPAWN_ROOM (A1), а не остался в B1');
     t_assert(isset($state['rooms'][$p['SPAWN_ROOM']]), 'карта SPAWN_ROOM загружена в state[rooms]');
     t_assert($p['CUR_POSITION_XY'] === $p['START_POSITION_XY'], 'встал ровно на личную стартовую клетку (она свободна)');

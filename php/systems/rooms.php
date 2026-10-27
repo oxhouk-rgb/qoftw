@@ -265,9 +265,20 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
         return ['success' => false, 'message' => 'Нет свободной клетки'];
     }
 
-    // Выписка из старой комнаты: движение обрывается навсегда
-    $player['STATUS'] = 'IDLE';
-    unset($player['MOVE_START_TIME'], $player['MOVE_END_TIME'], $player['MOVE_DISTANCE']);
+    // Выписка из старой комнаты: движение обрывается навсегда.
+    // ★ Клетка двери — мгновенная телепортация, а не путь по сетке: выдаём
+    // «виртуальный» финал движения (MOVING с MOVE_END_TIME в прошлом). Тик
+    // movement_update на следующем poll сам завершит его: снимет MOVING_* и
+    // выставит IDLE (или восстановит STUNNED из активных NEGATIVES). Прямая
+    // установка STATUS='IDLE' здесь была причиной двух багов: (а) игрок мог
+    // остаться с висевшим STATUS='MOVING' без ходовых данных — клиент
+    // блокировал клики и НЕ рисовал подсветку зон; (б) если бы статус
+    // сбрасывался, но боец всё ещё стоял на клетке exit (см. ниже), первый же
+    // клик возвращал бы спрайт к двери («рывок к exit»).
+    $player['STATUS'] = 'MOVING';
+    $player['MOVE_START_TIME'] = microtime(true);
+    $player['MOVE_END_TIME'] = microtime(true);
+    unset($player['MOVE_DISTANCE']);
     $player['ROOM_ID'] = $to_room_id;
     $player['CUR_POSITION_XY'] = $spawn_xy;
     $player['END_POSITION_XY'] = $spawn_xy;

@@ -1090,14 +1090,17 @@ function renderGrid(data) {
                 updatePlayerEntity(entity, player);
             }
             
-            // ★ «Рывок к двери» после перехода в другую комнату: серверный тик
-            // мог завершить ход и телепортировать бойца (STATUS ещё MOVING до
-            // конца хода, но MOVE_*_TIME уже сняты, END=CUR — точка входа).
-            // Локальная анимация в этот момент может тащить спрайт от прежней
-            // конечной клетки; при совпадении серверных START/END сбрасываем её
-            // и ставим спрайт ровно на серверную позицию — клиентский источник
-            // истины для позиции между ходами всегда сервер.
-            if (player.STATUS === 'MOVING' && player.START_POSITION_XY === player.END_POSITION_XY) {
+            // ★ Мгновенные переходы (дверь между комнатами, респаун): сервер
+            // выдаёт «виртуальный финал движения» — STATUS='MOVING', но путь
+            // нулевой (START == END или END == CUR, MOVE_END_TIME наступил).
+            // Такой боец НЕ анимируется: локальные rAF-анимации старой
+            // траектории сбрасываются, спрайт ставится ровно на серверную
+            // позицию. Без этого шага спрайт «прилипал» к клетке выхода, а
+            // следующий клик начинал маршрут от неё («рывок к exit»).
+            const instantMove = player.STATUS === 'MOVING' &&
+                (player.START_POSITION_XY === player.END_POSITION_XY ||
+                 player.END_POSITION_XY === player.CUR_POSITION_XY);
+            if (instantMove) {
                 state.animations.forEach((anim, key) => {
                     if (key.startsWith(`${pid}_`)) state.animations.delete(key);
                 });
@@ -1111,7 +1114,7 @@ function renderGrid(data) {
             }
 
             // Обрабатываем перемещение
-            if (player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
+            if (!instantMove && player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
                 // Игрок двигается - запускаем клиентскую анимацию
                 const startPos = parseXY(player.START_POSITION_XY);
                 const endPos = parseXY(player.END_POSITION_XY);
