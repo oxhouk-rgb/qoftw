@@ -921,6 +921,14 @@ function renderGrid(data) {
         state.animations.clear();
     }
     if (data.room_id) state.lastRoomId = data.room_id;
+
+    // ★ Комната, которую РИСУЕМ сейчас (grid карты = её координатная сетка).
+    const viewRoomId = data.room_id || null;
+    // Игроки: poll отдаёт список целиком (нужен для инфы/подсветки), но рисовать
+    // и анимировать можно только бойцов ТЕКУЩЕЙ комнаты — их координаты живут в
+    // сетке своей карты. Без фильтра спрайты чужих комнат «дублировались» поверх
+    // стен видимой комнаты (позиции в разных комнатах координатно совпадают).
+    const inViewRoom = (e) => !viewRoomId || (e && (e.ROOM_ID == null || e.ROOM_ID === viewRoomId));
     
     // Отрисовка стен
     if (room && room.grid) {
@@ -964,7 +972,21 @@ function renderGrid(data) {
     if (data.players) {
         Object.keys(data.players).forEach(pid => {
             const player = data.players[pid];
-            
+
+            // ★ Комнатная изоляция отрисовки: боец чужой комнаты не должен ни
+            // появляться на этой карте, ни оставаться на ней «дубликатом» —
+            // при выходе из поля его div удаляется (он перерисуется, когда
+            // игрок вернётся в комнату этого бойца).
+            // Строгое сравнение: боец БЕЗ ROOM_ID здесь НЕ рисуется (сервер
+            // обязан проставить комнату в poll-ответе; «undefined == null» в
+            // JS истинно, поэтому мягкая проверка inViewRoom() для игроков
+            // ненадёжна — без strict боец без поля рисовался во всех комнатах).
+            if (viewRoomId && player.ROOM_ID !== viewRoomId) {
+                const foreign = document.querySelector(`[data-player-id="${pid}"]`);
+                if (foreign) foreign.remove();
+                return;
+            }
+
             // Удаляем элемент только когда игрок полностью убран из боя сервером (REMOVED).
             // Стадии DEATH/DECAY НЕ удаляем — div должен оставаться на поле всё время
             // проигрывания обеих анимаций (по 1 секунде на стадию), респавн/удаление
@@ -1007,6 +1029,26 @@ function renderGrid(data) {
                 updatePlayerEntity(entity, player);
             }
             
+            // ★ «Рывок к двери» после перехода в другую комнату: серверный тик
+            // мог завершить ход и телепортировать бойца (STATUS ещё MOVING до
+            // конца хода, но MOVE_*_TIME уже сняты, END=CUR — точка входа).
+            // Локальная анимация в этот момент может тащить спрайт от прежней
+            // конечной клетки; при совпадении серверных START/END сбрасываем её
+            // и ставим спрайт ровно на серверную позицию — клиентский источник
+            // истины для позиции между ходами всегда сервер.
+            if (player.STATUS === 'MOVING' && player.START_POSITION_XY === player.END_POSITION_XY) {
+                state.animations.forEach((anim, key) => {
+                    if (key.startsWith(`${pid}_`)) state.animations.delete(key);
+                });
+                const sPos = parseXY(player.CUR_POSITION_XY);
+                const sCell = document.getElementById('cell-' + sPos.x + '-' + sPos.y);
+                entity.style.transform = '';
+                if (sCell && entity.parentElement !== sCell) {
+                    entity.style.transition = 'none';
+                    sCell.appendChild(entity);
+                }
+            }
+
             // Обрабатываем перемещение
             if (player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
                 // Игрок двигается - запускаем клиентскую анимацию
@@ -1057,7 +1099,15 @@ function renderGrid(data) {
     if (data.objects) {
         Object.keys(data.objects).forEach(oid => {
             const obj = data.objects[oid];
-            
+
+            // ★ Комнатная изоляция: объект чужой комнаты не рисуется поверх
+            // этой карты; его div удаляется с поля (перерисуется в своей комнате).
+            if (!inViewRoom(obj)) {
+                const foreignObj = document.querySelector(`[data-object-id="${oid}"]`);
+                if (foreignObj) foreignObj.remove();
+                return;
+            }
+
             // Удаляем если уничтожен
             if (obj.STATUS === 'DESTROYED') {
                 const existing = document.querySelector(`[data-object-id="${oid}"]`);
@@ -1081,6 +1131,14 @@ function renderGrid(data) {
     if (data.traps) {
         Object.keys(data.traps).forEach(tid => {
             const trap = data.traps[tid];
+
+            // ★ Комнатная изоляция: ловушка чужой комнаты не рисуется на этой карте.
+            if (!inViewRoom(trap)) {
+                const foreignTrap = document.querySelector(`[data-trap-id="${tid}"]`);
+                if (foreignTrap) foreignTrap.remove();
+                return;
+            }
+
             
             // Удаляем если не INTACT или не своя
             if (trap.STATUS !== 'INTACT' || (trap.ALLY !== state.playerId && trap.ALLY !== 'NONE')) {
@@ -1105,6 +1163,14 @@ function renderGrid(data) {
     if (data.npcs) {
         Object.keys(data.npcs).forEach(nid => {
             const npc = data.npcs[nid];
+
+            // ★ Комнатная изоляция: NPC чужой комнаты не рисуется на этой карте.
+            if (!inViewRoom(npc)) {
+                const foreignNpc = document.querySelector(`[data-npc-id="${nid}"]`);
+                if (foreignNpc) foreignNpc.remove();
+                return;
+            }
+
             
             // Удаляем если уничтожен
             if (npc.STATUS === 'DESTROYED') {
