@@ -17,6 +17,8 @@ require_once __DIR__ . '/../engine/rules.php';
 require_once __DIR__ . '/../engine/world.php';
 require_once __DIR__ . '/targeting.php';
 require_once __DIR__ . '/effects.php';
+require_once __DIR__ . '/movement.php'; // engine_active_room() — карты комнат для LOS/зон угрозы
+require_once __DIR__ . '/rooms.php';    // room_get() — ленивая загрузка карт комнат NPC
 
 /** Реестр типов автономных объектов (задел: сюда добавляются spawn-объекты способностей) */
 function getAutonomousObjectDefinitions() {
@@ -38,20 +40,28 @@ function getAutonomousObjectDefinitions() {
  * ============================================================================
  */
 
-/** Линия видимости для NPC: прямые (гориз/верт) и диагонали (Г-образная проверка) */
-function objects_has_line_of_sight($state, $x1, $y1, $x2, $y2) {
+/**
+ * Линия видимости для NPC: прямые (гориз/верт) и диагонали (Г-образная проверка).
+ * ★ Комнатная изоляция: сетка берётся из карты комнаты npc_room (engine_active_room),
+ * объекты/NPC/игроки учитываются только той же комнаты — иначе турель в B1
+ * «видела» бы стены и тела игроков из соседних комнат A1/A5/E1/E5.
+ */
+function objects_has_line_of_sight($state, $x1, $y1, $x2, $y2, $npc_room = null) {
     list($dx, $dy) = directionStep($x1, $y1, $x2, $y2);
+    $room = engine_active_room($state, $npc_room);
 
-    $blocked_at = function ($cx, $cy) use ($state) {
+    $blocked_at = function ($cx, $cy) use ($state, $room, $npc_room) {
         if (!isValidPosition($cx, $cy)) return true; // выход за карту = блок
-        if (isset($state['room']['grid'][$cy][$cx]) && $state['room']['grid'][$cy][$cx] === 0) return true;
+        if (isset($room['grid'][$cy][$cx]) && (int)$room['grid'][$cy][$cx] === 0) return true;
         foreach ($state['objects'] as $obj) {
+            if ($npc_room !== null && ($obj['ROOM_ID'] ?? null) !== $npc_room) continue;
             if ($obj['STATUS'] === 'DESTROYED') continue;
             $pos = parseXY($obj['POSITION_XY']);
             if ($pos['x'] === $cx && $pos['y'] === $cy) return true;
         }
         foreach ($state['players'] as $pid => $player) {
-            if ($player['STATUS'] === 'DEATH' || $player['STATUS'] === 'REMOVED') continue;
+            if ($npc_room !== null && ($player['ROOM_ID'] ?? null) !== $npc_room) continue;
+            if ($player['STATUS'] === 'DEATH' || $player['STATUS'] === 'DECAY' || $player['STATUS'] === 'REMOVED') continue;
             $pos = parseXY($player['CUR_POSITION_XY']);
             if ($pos['x'] === $cx && $pos['y'] === $cy) return true;
         }
@@ -81,15 +91,21 @@ function objects_has_line_of_sight($state, $x1, $y1, $x2, $y2) {
     return true;
 }
 
-/** Зона угрозы NPC: клетки в манхэттен-RANGE с линией видимости */
+/**
+ * Зона угрозы NPC: клетки в манхэттен-RANGE с линией видимости.
+ * ★ Комнатная изоляция: зона считается только внутри комнаты NPC — соседняя
+ * комната может иметь ту же систему координат, без фильтра турель «видела» бы
+ * клетки через дверь.
+ */
 function calculateThreatZone(&$state, $npc_id) {
     $npc = $state['npcs'][$npc_id];
     $npc_pos = parseXY($npc['POSITION_XY']);
+    $npc_room = $npc['ROOM_ID'] ?? null;
     $threat_cells = [];
 
     foreach (cellsInRadius($npc_pos['x'], $npc_pos['y'], $npc['RANGE']) as $cell) {
         if ($cell['x'] === $npc_pos['x'] && $cell['y'] === $npc_pos['y']) continue;
-        if (objects_has_line_of_sight($state, $npc_pos['x'], $npc_pos['y'], $cell['x'], $cell['y'])) {
+        if (objects_has_line_of_sight($state, $npc_pos['x'], $npc_pos['y'], $cell['x'], $cell['y'], $npc_room)) {
             $threat_cells[] = $cell;
         }
     }
@@ -120,10 +136,15 @@ function objects_check_threat_zone(&$state, $player_id, $x, $y, $opts = []) {
     $player = $state['players'][$player_id] ?? null;
     if (!$player) return $results;
     if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) return $results;
+    // ★ Комнатная изоляция: турель атакует только целей в СВОЕЙ комнате —
+    // координатные сетки соседних комнат совпадают, без фильтра игрок из A1
+    // «стоял» бы на той же клетке, что и зона угрозы турели в B1.
+    $player_room = $player['ROOM_ID'] ?? null;
 
     foreach ($state['npcs'] as $npc_id => &$npc) {
         if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH'], true)) continue;
         if ($npc['ACTIONS'] <= 0) continue;
+        if (($npc['ROOM_ID'] ?? null) !== $player_room) continue;
 
         // Пропускаем союзников (NPC 'ALLY' = создатель)
         if ($npc['ALLY'] !== 'NONE') {
@@ -185,10 +206,21 @@ function objects_check_threat_zone(&$state, $player_id, $x, $y, $opts = []) {
  * поэтому кэш THREAT_ZONE обязан обновляться каждый тик — иначе турель
  * продолжает «видеть» пустые клетки (анимация атаки по мёртвому/пустому) или
  * теряет реально вошедших в зону целей.
+ *
+ * ★ Мультикомнатность: карта комнаты NPC грузится лениво (room_get), но в
+ * state['rooms'] её может ещё не быть (игрок ещё не заходил). Поместим карту
+ * в состояние ПЕРЕД расчётом — иначе engine_active_room вернёт null, LOS
+ * сочтёт все клетки непроходимыми и зона угрозы окажется пустой до первого
+ * входа игрока в комнату («турель молчит, пока в неё не зайдёшь»).
  */
 function objects_refresh_threat_zones(&$state) {
     foreach ($state['npcs'] as $npc_id => &$npc) {
         if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH'], true)) continue;
+        $npc_room = $npc['ROOM_ID'] ?? null;
+        if ($npc_room !== null && $npc_room !== '' && !isset($state['rooms'][$npc_room])) {
+            $card = room_get($state, $npc_room);
+            if ($card !== null) $state['rooms'][$npc_room] = $card;
+        }
         $npc['THREAT_ZONE'] = calculateThreatZone($state, $npc_id);
     }
     unset($npc);
@@ -253,9 +285,14 @@ function processTraps(&$state, $player_id, $x, $y, $opts = []) {
     $player = $state['players'][$player_id] ?? null;
     if (!$player) return ['triggered' => false];
     $ally = $player['ALLY'];
+    // ★ Комнатная изоляция: мина «видит» только игрока своей комнаты —
+    // координатные сетки комнат совпадают, без фильтра игрок из A1 взводил бы
+    // ловушку, лежащую в B1.
+    $player_room = $player['ROOM_ID'] ?? null;
 
     foreach ($state['traps'] as $tid => &$trap) {
         if ($trap['STATUS'] !== 'INTACT') continue;
+        if (($trap['ROOM_ID'] ?? null) !== $player_room) continue;
 
         if ($trap['ALLY'] !== 'NONE') {
             if ($trap['ALLY'] === $player_id || $trap['ALLY'] === $ally) continue;

@@ -8,8 +8,10 @@
  * отдаём мгновенно. Сохранение только через world_save().
  *
  * Контракт ответа (плоский, без обёртки 'data' — сверено с js/game.js):
- *   version, room, grid?, objects, traps, npcs, players, projectiles, log,
+ *   version, room, room_id, grid?, objects, traps, npcs, players, projectiles, log,
  *   turn_time, turn_duration, time_to_next_turn, victory, rules
+ *   (room/objects/traps/npcs — текущая комната запросившего ?player=;
+ *    players[].MOVE_RANGE — эффективная дальность хода со SWIFT/SLOWED)
  */
 
 require_once __DIR__ . '/engine/bootstrap.php';
@@ -74,7 +76,7 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
 
             if ($server_version !== $client_version) {
                 header('Content-Type: application/json; charset=utf-8');
-                echo json_encode(build_poll_response($state, $server_version), JSON_UNESCAPED_UNICODE);
+                echo json_encode(build_poll_response($state, $server_version, $player_id), JSON_UNESCAPED_UNICODE);
                 closeRedis();
                 exit;
             }
@@ -89,7 +91,7 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
         // Таймаут long-poll: отдаём текущий снимок с timeout=true (как в старом контракте),
         // чтобы клиент обновил таймер хода даже при отсутствии событий.
         header('Content-Type: application/json; charset=utf-8');
-        $resp = build_poll_response($state, $server_version);
+        $resp = build_poll_response($state, $server_version, $player_id);
         $resp['timeout'] = true;
         echo json_encode($resp, JSON_UNESCAPED_UNICODE);
         closeRedis();
@@ -102,18 +104,59 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
 
 /**
  * Сборка flat-ответа poll (контракт клиента js/game.js render(data)).
+ *
+ * ★ Мультикомнатность: карта в ответе — комната ЗАПРОСИВШЕГО игрока (?player=),
+ * а не единая state['room']: раньше все четыре бойца видели карту первой
+ * комнаты. Сущности (objects/traps/npcs) фильтруются по ROOM_ID той же
+ * комнаты; игроки остаются списком целиком — клиент сам рисует только тех,
+ * чей ROOM_ID совпадает с текущей комнатой (позиции в разных комнатах
+ * координатно пересекаются и без фильтра рисовались бы поверх чужих стен).
+ * Если ?player= не передан или игрок неизвестен — legacy-карта state['room'].
  */
-function build_poll_response($state, $version) {
+function build_poll_response($state, $version, $player_id = null) {
     $now = time();
+
+    // Комната запросившего игрока + её карта (лениво из state['rooms']/data)
+    $cur_room_id = null;
+    if ($player_id !== null && isset($state['players'][$player_id])) {
+        $cur_room_id = $state['players'][$player_id]['ROOM_ID'] ?? null;
+    }
+    $room = null;
+    if ($cur_room_id !== null && $cur_room_id !== '') {
+        $room = $state['rooms'][$cur_room_id] ?? room_get($state, $cur_room_id);
+    }
+    if ($room === null) {
+        $room = $state['room'] ?? [];
+        $cur_room_id = $room['room_id'] ?? null;
+    }
+
+    // Эффективная дальность хода для подсветки движения на клиенте
+    // (SWIFT/SLOWED уже учтены шиной — клиент НЕ дублирует формулу)
+    $players_out = [];
+    foreach ($state['players'] as $pid => $p) {
+        if (!empty($p)) { // страховка от «дырявых» записей
+            $p['MOVE_RANGE'] = movement_effective_range($state, $pid);
+        }
+        $players_out[$pid] = $p;
+    }
+
+    $by_room = function ($list) use ($cur_room_id) {
+        if ($cur_room_id === null || $cur_room_id === '') return $list;
+        return array_filter($list, function ($e) use ($cur_room_id) {
+            return ($e['ROOM_ID'] ?? null) === $cur_room_id;
+        });
+    };
+
     return [
         'version' => $version,
         'rules' => rules_client_payload(),
-        'room' => $state['room'],
-        'grid' => $state['room']['grid'],
-        'objects' => $state['objects'],
-        'traps' => $state['traps'],
-        'npcs' => $state['npcs'],
-        'players' => $state['players'],
+        'room' => $room,
+        'room_id' => $cur_room_id,
+        'grid' => $room['grid'] ?? [],
+        'objects' => $by_room($state['objects']),
+        'traps' => $by_room($state['traps']),
+        'npcs' => $by_room($state['npcs']),
+        'players' => $players_out,
         'projectiles' => $state['projectiles'] ?? [],
         'log' => array_slice($state['log'], -30),
         'turn_time' => $state['turn_time'],
