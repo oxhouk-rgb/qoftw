@@ -24,6 +24,12 @@ let state = {
     selectedCell: null,
     polling: false,
     lastRoomId: null,   // ROOM_ID последнего poll-ответа (для перестройки поля при смене комнаты)
+    currentRoomId: null, // ★ Комната, которую РИСУЕМ сейчас (grid этой сетки).
+                         // Все клиентские проверки путей/занятости клеток обязаны
+                         // учитывать только сущности ЭТОЙ комнаты — координаты в
+                         // разных комнатах пересекаются (баг «урон по пустой
+                         // клетке через стену»: сервер не задевает, а клиент
+                         // подсвечивает/разрешает действие по позиции чужой комнаты).
     animations: new Map() // Храним анимации для каждого игрока
 };
 
@@ -316,6 +322,19 @@ function buildGrid() {
     }
 }
 
+/**
+ * ★ Комнатная изоляция клиентских проверок (см. state.currentRoomId).
+ * Сущность принадлежит рисуемой комнате? Игрок обязан иметь ROOM_ID —
+ * боец без комнаты НЕ считается «своим» (сервер гарантирует поле в
+ * poll-ответе; undefined == null в JS истинно, поэтому сравнение строгое).
+ */
+function inCurrentRoom(e) {
+    if (!e) return false;
+    const room = state.currentRoomId;
+    if (!room) return true; // legacy-режим единой карты — фильтра нет
+    return e.ROOM_ID === room;
+}
+
 // === ОБРАБОТКА КЛИКОВ ===
 
 /**
@@ -348,6 +367,7 @@ function isPathClear(x1, y1, x2, y2) {
                 for (const oid in state.data.objects) {
                     const obj = state.data.objects[oid];
                     if (obj.STATUS === 'DESTROYED') continue;
+                    if (!inCurrentRoom(obj)) continue; // ★ комнатная изоляция
                     const pos = parseXY(obj.POSITION_XY);
                     if (pos.x === cx && pos.y === cy) {
                         return false;
@@ -361,6 +381,7 @@ function isPathClear(x1, y1, x2, y2) {
                     if (pid === state.playerId) continue;
                     const player = state.data.players[pid];
                     if (player.STATUS === 'DEATH' || player.STATUS === 'DECAY' || player.STATUS === 'REMOVED') continue;
+                    if (!inCurrentRoom(player)) continue; // ★ комнатная изоляция
                     const pos = parseXY(player.CUR_POSITION_XY);
                     if (pos.x === cx && pos.y === cy) {
                         return false;
@@ -373,6 +394,7 @@ function isPathClear(x1, y1, x2, y2) {
                 for (const nid in state.data.npcs) {
                     const npc = state.data.npcs[nid];
                     if (npc.STATUS === 'DESTROYED' || npc.STATUS === 'DEATH' || npc.STATUS === 'REMOVED') continue;
+                    if (!inCurrentRoom(npc)) continue; // ★ комнатная изоляция
                     const pos = parseXY(npc.POSITION_XY);
                     if (pos.x === cx && pos.y === cy) {
                         return false;
@@ -410,6 +432,7 @@ function isCellFreeForMove(x, y) {
         for (const oid in state.data.objects) {
             const obj = state.data.objects[oid];
             if (obj.STATUS === 'DESTROYED') continue;
+            if (!inCurrentRoom(obj)) continue; // ★ комнатная изоляция
             const pos = parseXY(obj.POSITION_XY);
             if (pos.x === x && pos.y === y) {
                 return false;
@@ -423,6 +446,7 @@ function isCellFreeForMove(x, y) {
             if (pid === state.playerId) continue;
             const player = state.data.players[pid];
             if (player.STATUS === 'DEATH' || player.STATUS === 'DECAY' || player.STATUS === 'REMOVED') continue;
+            if (!inCurrentRoom(player)) continue; // ★ комнатная изоляция
             const pos = parseXY(player.CUR_POSITION_XY);
             if (pos.x === x && pos.y === y) {
                 return false;
@@ -435,6 +459,7 @@ function isCellFreeForMove(x, y) {
         for (const nid in state.data.npcs) {
             const npc = state.data.npcs[nid];
             if (npc.STATUS === 'DESTROYED' || npc.STATUS === 'DEATH' || npc.STATUS === 'REMOVED') continue;
+            if (!inCurrentRoom(npc)) continue; // ★ комнатная изоляция
             const pos = parseXY(npc.POSITION_XY);
             if (pos.x === x && pos.y === y) {
                 return false;
@@ -924,6 +949,9 @@ function renderGrid(data) {
 
     // ★ Комната, которую РИСУЕМ сейчас (grid карты = её координатная сетка).
     const viewRoomId = data.room_id || null;
+    state.currentRoomId = viewRoomId; // для inCurrentRoom(): проверки путей/подсветки
+    // обязаны видеть только сущности этой комнаты — координаты разных комнат
+    // пересекаются, иначе клиент подсвечивает/разрешает действия «сквозь стены».
     // Игроки: poll отдаёт список целиком (нужен для инфы/подсветки), но рисовать
     // и анимировать можно только бойцов ТЕКУЩЕЙ комнаты — их координаты живут в
     // сетке своей карты. Без фильтра спрайты чужих комнат «дублировались» поверх
@@ -1102,7 +1130,7 @@ function renderGrid(data) {
 
             // ★ Комнатная изоляция: объект чужой комнаты не рисуется поверх
             // этой карты; его div удаляется с поля (перерисуется в своей комнате).
-            if (!inViewRoom(obj)) {
+            if (viewRoomId && obj.ROOM_ID !== viewRoomId) {
                 const foreignObj = document.querySelector(`[data-object-id="${oid}"]`);
                 if (foreignObj) foreignObj.remove();
                 return;
@@ -1133,7 +1161,7 @@ function renderGrid(data) {
             const trap = data.traps[tid];
 
             // ★ Комнатная изоляция: ловушка чужой комнаты не рисуется на этой карте.
-            if (!inViewRoom(trap)) {
+            if (viewRoomId && trap.ROOM_ID !== viewRoomId) {
                 const foreignTrap = document.querySelector(`[data-trap-id="${tid}"]`);
                 if (foreignTrap) foreignTrap.remove();
                 return;
@@ -1165,7 +1193,7 @@ function renderGrid(data) {
             const npc = data.npcs[nid];
 
             // ★ Комнатная изоляция: NPC чужой комнаты не рисуется на этой карте.
-            if (!inViewRoom(npc)) {
+            if (viewRoomId && npc.ROOM_ID !== viewRoomId) {
                 const foreignNpc = document.querySelector(`[data-npc-id="${nid}"]`);
                 if (foreignNpc) foreignNpc.remove();
                 return;

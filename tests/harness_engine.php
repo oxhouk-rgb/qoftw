@@ -219,15 +219,60 @@ function test_poll_room_filtering() {
     t_assert(count($foreign_obj) === 0, 'poll(PLAYER1): ни одного объекта чужой комнаты');
     $with_range = array_filter($resp['players'] ?? [], function ($p) { return isset($p['MOVE_RANGE']); });
     t_assert(count($with_range) === count($resp['players'] ?? []), 'poll: у всех игроков есть MOVE_RANGE');
+    $foreign_trap = array_filter($resp['traps'] ?? [], function ($e) { return ($e['ROOM_ID'] ?? '') !== 'A1'; });
+    t_assert(count($foreign_trap) === 0, 'poll(PLAYER1): ни одной ловушки чужой комнаты');
 
     // Неизвестный ?player= → legacy-карта (обратная совместимость debug-клиентов)
     $resp_b1 = \TestPollNs\build_poll_response($state, 1, 'NPC_TEST_ABSENT');
     t_assert(($resp_b1['room']['room_id'] ?? '') === 'B1', 'poll без игрока: legacy-карта B1');
 }
 
+/**
+ * T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает
+ * бойца в другой комнате с совпадающими координатами»): find_target_at_position
+ * и get_targets_on_line обязаны видеть только сущности комнаты атакующего.
+ */
+function test_crossroom_targeting() {
+    echo "--- T4: цели/лучи ограничены комнатой атакующего ---\n";
+    $state = harness_build_state();
+    // Размещаем PLAYER2 в КООРДИНАТНО совпадающую клетку, но в ДРУГУЮ комнату
+    // (позиция игрока из legacy B1-карты).
+    $pos2 = parseXY($state['players']['PLAYER2']['CUR_POSITION_XY']);
+    $state['players']['PLAYER2']['ROOM_ID'] = 'B1';
+    $state['players']['PLAYER1']['ROOM_ID'] = 'A1';
+    $state['players']['PLAYER1']['CUR_POSITION_XY'] = '1,1';
+    $state['players']['PLAYER1']['STATUS'] = 'IDLE';
+    $state['players']['PLAYER2']['CUR_POSITION_XY'] = '5,5';
+    $state['players']['PLAYER2']['STATUS'] = 'IDLE';
+    unset($state['rooms']['A1']); unset($state['rooms']['B1']); // ленивая загрузка карт
+
+    // Клетка (5,5): в A1 там пусто, боец PLAYER2 — в B1 на тех же координатах
+    t_assert(find_target_at_position($state, 5, 5, 'PLAYER1') === null,
+        'T4: цель в чужой комнате не находится (атакующий в A1)');
+    t_assert(find_target_at_position($state, 5, 5, 'PLAYER2') !== null,
+        'T4: та же клетка видна атакующему из комнаты цели (B1)');
+
+    // Луч через всю карту: цели чужой комнаты не задеваются
+    $line = get_targets_on_line($state, 1, 1, 15, 5, 'PLAYER1');
+    $ids = array_column($line, 'id');
+    t_assert(!in_array('PLAYER2', $ids, true),
+        'T4: луч из A1 не собирает цели из B1');
+
+    // Проходимость: объект/NPC чужой комнаты НЕ блокирует клетки этой карты
+    $obj_foreign = false;
+    foreach ($state['objects'] as $o) {
+        if (($o['ROOM_ID'] ?? '') !== 'A1') {
+            $pp = parseXY($o['POSITION_XY']);
+            if (!is_cell_passable($state, $pp['x'], $pp['y'], 'A1')) { $obj_foreign = true; break; }
+        }
+    }
+    t_assert(!$obj_foreign, 'T4: объекты чужих комнат не перекрывают проходы A1/B1');
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
+test_crossroom_targeting();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);
