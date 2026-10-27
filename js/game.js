@@ -1130,28 +1130,34 @@ function renderGrid(data) {
 
             // ★ Комнатная изоляция: объект чужой комнаты не рисуется поверх
             // этой карты; его div удаляется с поля (перерисуется в своей комнате).
+            // querySelector без scope искал div по ВСЕМУ документу — после
+            // rebuildGrid() в DOM живут два набора ячеек (старый удалённый и
+            // новый), из-за чего «найденный» div мог оставаться в клетке
+            // старой сетки, а в новой комнате создавался второй — визуальный
+            // ДУБЛЬ бочки/турели во всех комнатах. Ищем строго внутри cells
+            // текущей сетки и синхронизируем позицию при каждом рендере.
             if (viewRoomId && obj.ROOM_ID !== viewRoomId) {
-                const foreignObj = document.querySelector(`[data-object-id="${oid}"]`);
+                const foreignObj = cells.querySelector(`[data-object-id="${oid}"]`);
                 if (foreignObj) foreignObj.remove();
                 return;
             }
 
             // Удаляем если уничтожен
             if (obj.STATUS === 'DESTROYED') {
-                const existing = document.querySelector(`[data-object-id="${oid}"]`);
+                const existing = cells.querySelector(`[data-object-id="${oid}"]`);
                 if (existing) existing.remove();
                 return;
             }
             
-            let entity = document.querySelector(`[data-object-id="${oid}"]`);
+            let entity = cells.querySelector(`[data-object-id="${oid}"]`);
             
             if (!entity) {
                 entity = createObjectEntity(obj);
                 entity.dataset.objectId = oid;
-                const pos = parseXY(obj.POSITION_XY);
-                const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
-                if (cell) cell.appendChild(entity);
             }
+            const pos = parseXY(obj.POSITION_XY);
+            const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
+            if (cell && entity.parentElement !== cell) cell.appendChild(entity);
         });
     }
     
