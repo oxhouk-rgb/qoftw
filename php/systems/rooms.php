@@ -182,6 +182,13 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
         unset($player);
         return ['success' => false, 'message' => 'Комната не найдена'];
     }
+    // Оседлать карту в state['rooms']: room_get грузит лениво из data/*.json,
+    // но НЕ мутирует состояние — без этого шага комната «исчезала» между
+    // вызовами (каждый следующий читатель снова тащил её с диска, а
+    // saveBattleState писал в Redis только уже осевшие карты).
+    if (!isset($state['rooms'][$to_room_id])) {
+        $state['rooms'][$to_room_id] = $room;
+    }
     // Ключ комнаты = её ID в состоянии (карты из state['rooms'] могут не иметь
     // поля room_id — берём переданный $to_room_id, он канонический).
     $room_key = $to_room_id;
