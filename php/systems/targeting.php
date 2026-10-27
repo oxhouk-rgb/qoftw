@@ -176,8 +176,13 @@ function get_targets_in_area($state, $center_x, $center_y, $radius, $caster_id) 
  *
  * @param string|null $room_filter — если задан, учитываются только игроки этой
  *        комнаты (мультикартовый мир: соседи в других комнатах клетки не занимают).
+ * @param bool $moving_cur_only — для выбора КЛЕТКИ ПОЯВЛЕНИЯ после перехода/
+ *        респауна: движущийся боец чужой комнаты ещё может «долететь» до своей
+ *        END-клетки, поэтому от появляющегося игрока его блокирует только та
+ *        клетка, где он стоит СЕЙЧАС (CUR), а не обе. Иначе два независимых
+ *        пути в разных комнатах ложно конфликтовали бы по совпадающим XY.
  */
-function is_player_at_position($state, $x, $y, $exclude_id = null, $room_filter = null) {
+function is_player_at_position($state, $x, $y, $exclude_id = null, $room_filter = null, $moving_cur_only = false) {
     foreach ($state['players'] as $pid => $player) {
         if ($pid === $exclude_id) continue;
         // Мертвый/распадающийся/удаленный игрок клетку НЕ занимает (иначе
@@ -188,7 +193,7 @@ function is_player_at_position($state, $x, $y, $exclude_id = null, $room_filter 
         $pos = parseXY($player['CUR_POSITION_XY']);
         if ($pos['x'] === $x && $pos['y'] === $y) return true;
 
-        if ($player['STATUS'] === 'MOVING') {
+        if ($player['STATUS'] === 'MOVING' && !$moving_cur_only) {
             $end_pos = parseXY($player['END_POSITION_XY']);
             if ($end_pos['x'] === $x && $end_pos['y'] === $y) return true;
         }
