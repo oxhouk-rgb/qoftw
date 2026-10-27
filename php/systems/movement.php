@@ -23,6 +23,18 @@ require_once __DIR__ . '/../engine/rules.php';
 require_once __DIR__ . '/../engine/world.php';
 require_once __DIR__ . '/targeting.php';
 require_once __DIR__ . '/effects.php';
+require_once __DIR__ . '/rooms.php'; // room_get() — карты комнат для is_cell_passable
+
+/**
+ * ★ Карта, в которой происходит действие: state['room'] (единая карта legacy)
+ * либо rooms[$room_id] (мультикарта). Все «стеновые» проверки движка обязаны
+ * брать сетку отсюда, иначе выход через дверь ломался бы о чужие стены.
+ */
+function engine_active_room($state, $room_id = null) {
+    if ($room_id === null || $room_id === '') return $state['room'] ?? null;
+    if (isset($state['rooms'][$room_id])) return $state['rooms'][$room_id];
+    return room_get($state, $room_id);
+}
 
 /**
  * Начать перемещение игрока (валидация + предсказание пути + очередь анимации).
@@ -38,6 +50,12 @@ function movement_process_move(&$state, $player_id, $target_x, $target_y) {
     $player = $state['players'][$player_id];
 
     $cur_pos = parseXY($player['CUR_POSITION_XY']);
+    // Комната игрока: все проверки пути/целей идут по её карте и сущностям
+    $room_id = $player['ROOM_ID'] ?? '';
+    $room = engine_active_room($state, $room_id);
+    if ($room === null) {
+        return ['success' => false, 'message' => 'Комната не найдена: ' . $room_id];
+    }
 
     // Дальность хода — базовая константа + редукция слушателями шины
     $dist_query = emitReduce($state, 'movement.query_distance', [
@@ -56,17 +74,17 @@ function movement_process_move(&$state, $player_id, $target_x, $target_y) {
         return ['success' => false, 'message' => 'Перемещение только по прямой'];
     }
 
-    // Путь: препятствия и занятость клеток
+    // Путь: препятствия и занятость клеток (в СВОЕЙ комнате)
     $path = calculatePath($cur_pos['x'], $cur_pos['y'], $target_x, $target_y);
     foreach ($path as $step) {
-        if (!is_cell_passable($state, $step['x'], $step['y'])) {
+        if (!is_cell_passable($state, $step['x'], $step['y'], $room_id)) {
             return ['success' => false, 'message' => 'Путь заблокирован'];
         }
-        if (is_player_at_position($state, $step['x'], $step['y'], $player_id)) {
+        if (is_player_at_position($state, $step['x'], $step['y'], $player_id, $room_id)) {
             return ['success' => false, 'message' => 'Клетка занята другим игроком'];
         }
     }
-    if (is_player_at_position($state, $target_x, $target_y, $player_id)) {
+    if (is_player_at_position($state, $target_x, $target_y, $player_id, $room_id)) {
         return ['success' => false, 'message' => 'Конечная клетка занята'];
     }
 
