@@ -234,7 +234,7 @@ function turn_update_death_animations(&$state) {
                     $player['LIFE']--;
                     $player['HITPOINTS'] = $player['MAX_HITPOINTS'];
                     $player['SHIELD'] = $player['MAX_SHIELD'];
-                    // Респаун через телепорт в личную SPAWN_ROOM (см. шапkę):
+                    // Респаун через телепорт в личную SPAWN_ROOM (см. шапку):
                     // позиция, ROOM_ID и карта комнаты обновляются атомарно.
                     $spawn_room = $player['SPAWN_ROOM'] ?? '';
                     unset($player['DEATH_TIME'], $player['DECAY_TIME']);
