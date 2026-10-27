@@ -23,8 +23,25 @@ let state = {
     data: null,
     selectedCell: null,
     polling: false,
+    lastRoomId: null,   // ROOM_ID последнего poll-ответа (для перестройки поля при смене комнаты)
     animations: new Map() // Храним анимации для каждого игрока
 };
+
+/**
+ * ★ Пункт плана №4: эффективная дальность хода со всеми модификаторами.
+ * Сервер считает её ОДНОЙ формулой (php/systems/movement.php →
+ * movement_effective_range: MAX_MOVE_DISTANCE + SWIFT(passive) − SLOWED,
+ * floor 1) и отдаёт в поле players[].MOVE_RANGE каждого poll-ответа.
+ * Клиент НЕ дублирует формулу — использует готовое значение; fallback на
+ * базовые 5 только если сервер вернул ответ без MOVE_RANGE (старая версия).
+ */
+function effectiveMoveRange(player) {
+    if (!player) return 5;
+    if (typeof player.MOVE_RANGE === 'number' && player.MOVE_RANGE > 0) {
+        return player.MOVE_RANGE;
+    }
+    return 5;
+}
 
 // === ИНИЦИАЛИЗАЦИЯ ===
 
@@ -550,7 +567,7 @@ function showActionDialog(x, y) {
     
     // Кнопка перемещения
     const btnMove = document.getElementById('btn-move');
-    const maxMove = 5; // TODO: учесть SWIFT и SLOWED
+    const maxMove = effectiveMoveRange(player); // SWIFT/SLOWED учтены сервером (MOVE_RANGE)
     const canMove = distance > 0 && 
                     distance <= maxMove && 
                     player.STATUS !== 'MOVING' && 
@@ -828,7 +845,7 @@ function highlightPlayerZones(data) {
     }
     
     const playerPos = parseXY(player.CUR_POSITION_XY);
-    const maxMove = 5; // TODO: учесть SWIFT и SLOWED
+    const maxMove = effectiveMoveRange(player); // SWIFT/SLOWED учтены сервером (MOVE_RANGE)
     
     // Подсветка зоны перемещения (зелёная)
     for (let dx = -maxMove; dx <= maxMove; dx++) {
@@ -889,10 +906,21 @@ function renderGrid(data) {
     
     // Сбрасываем подсветку
     document.querySelectorAll('.cell').forEach(cell => {
-        cell.classList.remove('highlight-move', 'highlight-attack', 'highlight-ability');
+        // Снимаем и прошлые метки карты (wall/stair): при смене комнаты стены
+        // и двери полностью перерисовываются по новому grid ниже.
+        cell.classList.remove('highlight-move', 'highlight-attack', 'highlight-ability', 'wall', 'stair');
     });
     
     const room = data.room;
+
+    // ★ Мультикомнатный мир: при смене комнаты (переход в дверь/респаун в
+    // SPAWN_ROOM) сбрасываем локальные анимации движения — иначе «призрачный»
+    // rAF interpolation тащит спрайт от клетки старой комнаты к координатам
+    // новой поверх серверной позиции.
+    if (state.lastRoomId !== null && data.room_id && data.room_id !== state.lastRoomId) {
+        state.animations.clear();
+    }
+    if (data.room_id) state.lastRoomId = data.room_id;
     
     // Отрисовка стен
     if (room && room.grid) {
@@ -907,12 +935,27 @@ function renderGrid(data) {
             }
         }
         
-        // Лестницы/выходы
+        // Лестницы/двери между комнатами. Подписываем дверь названием комнаты
+        // назначения (exits["x,y"] = КУДА; exit_rooms["x,y"] = ОТКУДА — обратная
+        // дверь), чтобы игрок видел, куда ведёт переход.
         if (room.exits) {
             Object.keys(room.exits).forEach(key => {
                 const [x, y] = key.split(',').map(Number);
                 const cell = document.getElementById('cell-' + x + '-' + y);
-                if (cell) cell.classList.add('stair');
+                if (cell) {
+                    cell.classList.add('stair');
+                    cell.title = '-> ' + room.exits[key];
+                }
+            });
+        }
+        if (room.exit_rooms) {
+            Object.keys(room.exit_rooms).forEach(key => {
+                const [x, y] = key.split(',').map(Number);
+                const cell = document.getElementById('cell-' + x + '-' + y);
+                if (cell) {
+                    cell.classList.add('stair');
+                    cell.title = 'из ' + room.exit_rooms[key];
+                }
             });
         }
     }
