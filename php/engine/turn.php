@@ -201,9 +201,20 @@ function turn_check_advance(&$state) {
     return false;
 }
 
-/** Цепочка смерти DEATH → DECAY → respawn/removal (бывш. updateDeathAnimations) */
+/**
+ * ★ Фазы DEATH/DECAY: переход на респаун в Личную SPAWN_ROOM.
+ * Возвращает true, если цепочка на этом тике сдвинулась (нужен world_save).
+ *
+ * ВАЖНО (пункт плана №1): возрождение идёт НЕ прямой записью координат, а
+ * через rooms_teleport(..., 'respawn') — иначе игрок «воскресал» на клетке
+ * спавна в чужой комнате (позиция без смены ROOM_ID), и state['rooms'] не
+ * пополнялся картой его SPAWN_ROOM. rooms_teleport сам подбирает ближайшую
+ * свободную клетку от личной START_POSITION_XY (якорь спавна) и эмитит
+ * 'room.changed'.
+ */
 function turn_update_death_animations(&$state) {
     $now = time();
+    $changed = false;
 
     foreach ($state['players'] as $pid => &$player) {
         if ($player['STATUS'] === 'DEATH') {
@@ -213,6 +224,7 @@ function turn_update_death_animations(&$state) {
                 $player['STATUS'] = 'DECAY';
                 $player['DECAY_TIME'] = $now;
                 unset($player['DEATH_TIME']);
+                $changed = true;
             }
         } elseif ($player['STATUS'] === 'DECAY') {
             if (!isset($player['DECAY_TIME'])) {
@@ -222,17 +234,31 @@ function turn_update_death_animations(&$state) {
                     $player['LIFE']--;
                     $player['HITPOINTS'] = $player['MAX_HITPOINTS'];
                     $player['SHIELD'] = $player['MAX_SHIELD'];
-                    $player['CUR_POSITION_XY'] = $player['START_POSITION_XY'];
-                    $player['STATUS'] = 'IDLE';
+                    // Респаун через телепорт в личную SPAWN_ROOM (см. шапkę):
+                    // позиция, ROOM_ID и карта комнаты обновляются атомарно.
+                    $spawn_room = $player['SPAWN_ROOM'] ?? '';
                     unset($player['DEATH_TIME'], $player['DECAY_TIME']);
+                    $res = rooms_teleport($state, $pid, $spawn_room, 'respawn');
+                    if (empty($res['success'])) {
+                        // Страховка legacy-поведения: телепорт невозможен
+                        // (нет карты/свободной клетки) — возвращаем на стартовую
+                        // клетку внутри текущей комнаты, статус всё равно IDLE.
+                        $player['CUR_POSITION_XY'] = $player['START_POSITION_XY'];
+                        $player['END_POSITION_XY'] = $player['START_POSITION_XY'];
+                        $player['STATUS'] = 'IDLE';
+                        $state = world_log($state, "{$pid}: респаун-телепорт не удался (" . ($res['message'] ?? '?') . ") — возврат на клетку старта");
+                    }
+                    $changed = true;
                 } else {
                     $player['STATUS'] = 'REMOVED';
                     unset($player['DEATH_TIME'], $player['DECAY_TIME']);
+                    $changed = true;
                 }
             }
         }
     }
     unset($player);
+    return $changed;
 }
 
 /** Проектели: cast → hit → done по серверным часам (бывш. updateProjectiles) */
