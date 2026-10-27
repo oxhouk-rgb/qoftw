@@ -323,6 +323,25 @@ function buildGrid() {
 }
 
 /**
+ * ★ Найти DOM-элемент сущности СТРОГО внутри текущей видимой сетки.
+ * Глобальный document.querySelector находил «сиротские» div'ы в старых
+ * перестроенных сетках (после смены комнаты), поэтому объекты/NPC могли
+ * дублироваться визуально во всех комнатах сразу. Видимая сетка всегда
+ * последняя в DOM — lastElementChild даёт именно её.
+ */
+function findEntity(kind, id) {
+    const attr = kind === 'player' ? 'data-player-id'
+        : kind === 'object' ? 'data-object-id'
+        : kind === 'trap' ? 'data-trap-id'
+        : 'data-npc-id';
+    const container = document.getElementById('grid-container');
+    if (!container) return null;
+    // Сиротские div'ы старых комнат живут ВНЕ контейнера (их клетки удалены из
+    // DOM вместе со старой сеткой) — ищем строго внутри текущего поля.
+    return container.querySelector(`[${attr}="${id}"]`);
+}
+
+/**
  * ★ Комнатная изоляция клиентских проверок (см. state.currentRoomId).
  * Сущность принадлежит рисуемой комнате? Игрок обязан иметь ROOM_ID —
  * боец без комнаты НЕ считается «своим» (сервер гарантирует поле в
@@ -926,6 +945,14 @@ function highlightPlayerZones(data) {
  * Отрисовка сетки с сущностями
  */
 function renderGrid(data) {
+    // ★ Область поиска DOM-сущностей — ТОЛЬКО текущая сетка. В DOM могут жить
+    // «сиротские» div'ы удалённых при rebuildGrid() старых комнат: глобальный
+    // document.querySelector находил такой div вне видимой сетки, проверка
+    // parentElement не срабатывала и объект/NPC оставался невидимкой, а в
+    // новой комнате создавался второй — визуальный ДУБЛЬ турелей/бочек/мин
+    // во всех комнатах сразу.
+    const cells = document.getElementById('grid-container');
+
     // Очищаем только снаряды (они временные)
     document.querySelectorAll('.projectile').forEach(e => e.remove());
     
@@ -956,7 +983,11 @@ function renderGrid(data) {
     // и анимировать можно только бойцов ТЕКУЩЕЙ комнаты — их координаты живут в
     // сетке своей карты. Без фильтра спрайты чужих комнат «дублировались» поверх
     // стен видимой комнаты (позиции в разных комнатах координатно совпадают).
-    const inViewRoom = (e) => !viewRoomId || (e && (e.ROOM_ID == null || e.ROOM_ID === viewRoomId));
+    // Строгое сравнение для ВСЕХ типов сущностей: объект/NPC/ловушка без
+    // ROOM_ID — legacy-данные (комната из battledata), они НЕ должны
+    // рисоваться поверх любой мультикомнатной карты — иначе турель чужого
+    // спавна «дублируется» во всех комнатах сразу (позиции совпадают).
+    const inViewRoom = (e) => !viewRoomId || (e && e.ROOM_ID === viewRoomId);
     
     // Отрисовка стен
     if (room && room.grid) {
@@ -1010,7 +1041,9 @@ function renderGrid(data) {
             // JS истинно, поэтому мягкая проверка inViewRoom() для игроков
             // ненадёжна — без strict боец без поля рисовался во всех комнатах).
             if (viewRoomId && player.ROOM_ID !== viewRoomId) {
-                const foreign = document.querySelector(`[data-player-id="${pid}"]`);
+                // Поиск строго внутри cells: div бойца мог «осиротеть» в старой
+                // сетке после смены комнаты и остаться невидимым дубликатом.
+                const foreign = findEntity('player', pid);
                 if (foreign) foreign.remove();
                 return;
             }
@@ -1020,13 +1053,13 @@ function renderGrid(data) {
             // проигрывания обеих анимаций (по 1 секунде на стадию), респавн/удаление
             // происходит на сервере после DECAY.
             if (player.STATUS === 'REMOVED') {
-                const existing = document.querySelector(`[data-player-id="${pid}"]`);
+                const existing = findEntity('player', pid);
                 if (existing) existing.remove();
                 return;
             }
             
-            // Ищем существующий элемент игрока
-            let entity = document.querySelector(`[data-player-id="${pid}"]`);
+            // Ищем существующий элемент игрока (строго в текущей сетке)
+            let entity = findEntity('player', pid);
 
             // Если сервер снял статус MOVING (например, игрок мгновенно
             // остановлен ловушкой на клетке мины), досрочно завершаем
@@ -1137,19 +1170,19 @@ function renderGrid(data) {
             // ДУБЛЬ бочки/турели во всех комнатах. Ищем строго внутри cells
             // текущей сетки и синхронизируем позицию при каждом рендере.
             if (viewRoomId && obj.ROOM_ID !== viewRoomId) {
-                const foreignObj = cells.querySelector(`[data-object-id="${oid}"]`);
+                const foreignObj = findEntity('object', oid);
                 if (foreignObj) foreignObj.remove();
                 return;
             }
 
             // Удаляем если уничтожен
             if (obj.STATUS === 'DESTROYED') {
-                const existing = cells.querySelector(`[data-object-id="${oid}"]`);
+                const existing = findEntity('object', oid);
                 if (existing) existing.remove();
                 return;
             }
             
-            let entity = cells.querySelector(`[data-object-id="${oid}"]`);
+            let entity = findEntity('object', oid);
             
             if (!entity) {
                 entity = createObjectEntity(obj);
@@ -1168,7 +1201,7 @@ function renderGrid(data) {
 
             // ★ Комнатная изоляция: ловушка чужой комнаты не рисуется на этой карте.
             if (viewRoomId && trap.ROOM_ID !== viewRoomId) {
-                const foreignTrap = document.querySelector(`[data-trap-id="${tid}"]`);
+                const foreignTrap = findEntity('trap', tid);
                 if (foreignTrap) foreignTrap.remove();
                 return;
             }
@@ -1176,20 +1209,23 @@ function renderGrid(data) {
             
             // Удаляем если не INTACT или не своя
             if (trap.STATUS !== 'INTACT' || (trap.ALLY !== state.playerId && trap.ALLY !== 'NONE')) {
-                const existing = document.querySelector(`[data-trap-id="${tid}"]`);
+                const existing = findEntity('trap', tid);
                 if (existing) existing.remove();
                 return;
             }
             
-            let entity = document.querySelector(`[data-trap-id="${tid}"]`);
+            let entity = findEntity('trap', tid);
             
             if (!entity) {
                 entity = createTrapEntity(trap);
                 entity.dataset.trapId = tid;
-                const pos = parseXY(trap.POSITION_XY);
-                const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
-                if (cell) cell.appendChild(entity);
             }
+            // ★ Позиция синхронизируется при КАЖДОМ рендере (не только при
+            // создании): div мог остаться в клетке перестроенной сетки после
+            // смены комнаты — без этого мина «прилипала» к старым координатам.
+            const tpos = parseXY(trap.POSITION_XY);
+            const tcell = document.getElementById('cell-' + tpos.x + '-' + tpos.y);
+            if (tcell && entity.parentElement !== tcell) tcell.appendChild(entity);
         });
     }
     
@@ -1199,8 +1235,12 @@ function renderGrid(data) {
             const npc = data.npcs[nid];
 
             // ★ Комнатная изоляция: NPC чужой комнаты не рисуется на этой карте.
+            // Поиск div — строго внутри cells (см. начало renderGrid): глобальный
+            // querySelector находил «сиротские» div'ы в старых перестроенных
+            // сетках, из-за чего турель ДУБЛИРОВАЛАСЬ во всех комнатах, кроме
+            // спавна игрока.
             if (viewRoomId && npc.ROOM_ID !== viewRoomId) {
-                const foreignNpc = document.querySelector(`[data-npc-id="${nid}"]`);
+                const foreignNpc = findEntity('npc', nid);
                 if (foreignNpc) foreignNpc.remove();
                 return;
             }
@@ -1208,27 +1248,31 @@ function renderGrid(data) {
             
             // Удаляем если уничтожен
             if (npc.STATUS === 'DESTROYED') {
-                const existing = document.querySelector(`[data-npc-id="${nid}"]`);
+                const existing = findEntity('npc', nid);
                 if (existing) existing.remove();
                 return;
             }
             
-            let entity = document.querySelector(`[data-npc-id="${nid}"]`);
+            let entity = findEntity('npc', nid);
             
             if (!entity) {
                 entity = createNpcEntity(npc);
                 entity.dataset.npcId = nid;
-                const pos = parseXY(npc.POSITION_XY);
-                const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
-                if (cell) cell.appendChild(entity);
-            } else {
-                // Обновляем статус NPC
-                const statusEl = entity.querySelector('.entity-status');
-                if (statusEl) {
-                    statusEl.textContent = npc.STATUS.toLowerCase();
-                }
-                entity.className = 'entity npc-entity status-' + npc.STATUS.toLowerCase();
             }
+            // ★ Позиция синхронизируется при КАЖДОМ рендере: после смены
+            // комнаты div мог остаться в клетке перестроенной сетки.
+            const npos = parseXY(npc.POSITION_XY);
+            const ncell = document.getElementById('cell-' + npos.x + '-' + npos.y);
+            if (ncell && entity.parentElement !== ncell) {
+                entity.style.transition = 'none';
+                ncell.appendChild(entity);
+            }
+            // Обновляем статус NPC
+            const statusEl = entity.querySelector('.entity-status');
+            if (statusEl) {
+                statusEl.textContent = npc.STATUS.toLowerCase();
+            }
+            entity.className = 'entity npc-entity status-' + npc.STATUS.toLowerCase();
         });
     }
     
