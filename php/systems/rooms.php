@@ -126,15 +126,21 @@ function room_candidate_cells($state, $room, $door_x, $door_y) {
  *   - свободна = проходима (стена/целый объект/живой NPC не подходят) и не
  *     занята живым игроком ТОЙ ЖЕ комнаты (MOVING-игрок блокирует и свою
  *     текущую, и конечную клетку — см. is_player_at_position);
+ *   - $forbidden — явный чёрный список клеток ("x,y"); $is_exit — callback,
+ *     возвращающий true для КЛЕТКИ-ВЫХОДА: на саму дверь боец вставать не
+ *     должен (появление «рядом» с дверью, совпадает с картинкой клиента);
  *   - если ничего не найдено — возвращается null (вызывающий решает).
  */
-function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid, $room_key = null) {
+function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid, $room_key = null, $forbidden = [], $is_exit = null) {
     if ($room === null) return null;
     if ($room_key === null) $room_key = $room['room_id'] ?? null;
     foreach (room_candidate_cells($state, $room, $door_x, $door_y) as $c) {
+        $xy = formatXY($c['x'], $c['y']);
+        if (isset($forbidden[$xy])) continue;
+        if ($is_exit !== null && $is_exit($xy)) continue;
         if (room_cell_blocked($state, $room, $c['x'], $c['y'], $room_key)) continue;
         if (is_player_at_position($state, $c['x'], $c['y'], $exclude_pid, $room_key)) continue;
-        return formatXY($c['x'], $c['y']);
+        return $xy;
     }
     return null;
 }
@@ -193,42 +199,65 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     // поля room_id — берём переданный $to_room_id, он канонический).
     $room_key = $to_room_id;
 
-    // Точка появления у двери: предпочтительна обратная дверь этой комнаты
-    // (exit_rooms["x,y"] = ОТКУДА пришли), иначе — любая её exit-клетка,
-    // иначе центр карты (страховка).
-    $door = null;
+    // Клетки-двери этой комнаты: по ним игрок УЖЕ стоит — вставать на саму
+    // дверь нельзя (баг «рывок к exit»: серверная позиция на двери расходилась
+    // с клиентской картинкой «рядом с дверью», и следующий ход начинался от
+    // клетки exit). Предпочтительна обратная дверь (exit_rooms["x,y"] = ОТКУДА
+    // пришли), иначе — любая exit-клетка комнаты, иначе центр карты (страховка).
+    $door_cells = [];
+    $is_exit = function ($xy) use ($room) {
+        return isset($room['exits'][$xy]) || isset($room['exit_rooms'][$xy]);
+    };
     if ($reason === 'respawn') {
-        // Респаун после смерти: появление у личной START_POSITION_XY (см. ниже),
-        // дверь как ориентир не нужна, но поиск свободной клетки идём от старта.
+        // Респаун после смерти: появление у личной START_POSITION_XY. Стартовая
+        // клетка сама является exit-клеткой (A1 "0,0" → B1 и т.п.) — тогда
+        // ориентир поиска смещаем на соседнюю клетку ВГЛУБЬ комнаты: стоящий на
+        // двери боец при первом же тике получил бы повторный переход из своей
+        // комнаты (порочный круг «респаун → сразу ушёл в B1»).
         $sp = parseXY($player['START_POSITION_XY'] ?? '0,0');
-        $door = [$sp['x'], $sp['y']];
+        if ($is_exit(formatXY($sp['x'], $sp['y']))) {
+            $cx = ($room['width'] ?? GRID_WIDTH) / 2 - 0.5;
+            $cy = ($room['height'] ?? GRID_HEIGHT) / 2 - 0.5;
+            $nudge_x = $sp['x'] + ($cx > $sp['x'] ? 1 : ($cx < $sp['x'] ? -1 : 0));
+            $nudge_y = $sp['y'] + ($cy > $sp['y'] ? 1 : ($cy < $sp['y'] ? -1 : 0));
+            $door_cells[] = [max(0, min(GRID_WIDTH - 1, $nudge_x)), max(0, min(GRID_HEIGHT - 1, $nudge_y))];
+        } else {
+            $door_cells[] = [$sp['x'], $sp['y']];
+        }
     } else {
         $er = $room['exit_rooms'] ?? [];
         foreach ($er as $key => $rr) {
-            if ($rr === $from_room) { $p = parseXY($key); $door = [$p['x'], $p['y']]; break; }
+            if ($rr === $from_room) { $p = parseXY($key); $door_cells[] = [$p['x'], $p['y']]; }
         }
-        if ($door === null) {
+        if (!$door_cells) {
             foreach (array_keys($room['exits'] ?? []) as $key) {
-                $p = parseXY($key); $door = [$p['x'], $p['y']]; break;
+                $p = parseXY($key); $door_cells[] = [$p['x'], $p['y']];
             }
         }
     }
-    if ($door === null) $door = [(int)floor(($room['width'] ?? GRID_WIDTH) / 2), (int)floor(($room['height'] ?? GRID_HEIGHT) / 2)];
+    if (!$door_cells) $door_cells[] = [(int)floor(($room['width'] ?? GRID_WIDTH) / 2), (int)floor(($room['height'] ?? GRID_HEIGHT) / 2)];
+
+    // ★ Исключаем из кандидатов ВСЕ двери комнаты: candidate-кольцо строится
+    // вокруг первой двери, но вторая (например B1 имеет 4 угла-выхода) может
+    // попасть в радиус 4 и стать «ближайшей свободной» — боец встал бы на чужую
+    // дверь и при первом же тике получил бы повторный переход.
+    $forbidden = [];
+    foreach ($door_cells as $d) $forbidden[formatXY($d[0], $d[1])] = true;
 
     // Если личная стартовая клетка (респаун) свободна — встаём ровно на неё
     $spawn_xy = null;
     if ($reason === 'respawn') {
         $start = $player['START_POSITION_XY'] ?? null;
-        if ($start !== null) {
+        if ($start !== null && !$is_exit($start)) {
             $sp = parseXY($start);
             if (!room_cell_blocked($state, $room, $sp['x'], $sp['y'], $room_key) &&
-                !is_player_at_position($state, $sp['x'], $sp['y'], $player_id, $room_key)) {
+                !is_player_at_position($state, $sp['x'], $sp['y'], $player_id, $room_key, true)) {
                 $spawn_xy = $start;
             }
         }
     }
     if ($spawn_xy === null) {
-        $spawn_xy = room_find_spawn_cell($state, $room, $door[0], $door[1], $player_id, $room_key);
+        $spawn_xy = room_find_spawn_cell($state, $room, $door_cells[0][0], $door_cells[0][1], $player_id, $room_key, $forbidden, $is_exit);
     }
     if ($spawn_xy === null) {
         $state = world_log($state, "{$player_id}: переход в {$to_room_id} отменён — нет свободной клетки у двери");
@@ -242,7 +271,14 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     $player['ROOM_ID'] = $to_room_id;
     $player['CUR_POSITION_XY'] = $spawn_xy;
     $player['END_POSITION_XY'] = $spawn_xy;
-    // START_POSITION_XY — якорь личной спавн-клетки, НЕ перезаписываем.
+    // ★ START_POSITION_XY синхронизируем с точкой появления. Он остаётся
+    // якорем личной спавн-клетки в двух штатных случаях: (а) переход в чужую
+    // комнату — там боец ещё не был и его личный «последний занятый» это вход
+    // в новую комнату; (б) респаун на свою стартовую клетку — spawn_xy ===
+    // START. В промежуточных состояниях (боец умер НЕ на своей стартовой,
+    // стартовая занята) иначе получался бы «телепорт через всю карту» при
+    // следующем ходе: клиент интерполирует от START к END внутри новой сетки.
+    $player['START_POSITION_XY'] = $spawn_xy;
     unset($player['DEATH_TIME'], $player['DECAY_TIME']); // на всякий случай: вне цепочки смерти
 
     $state = world_log($state, "{$player_id}: {$reason} — переход {$from_room} → {$to_room_id} на клетку ({$spawn_xy})");
