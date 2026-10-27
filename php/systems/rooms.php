@@ -61,20 +61,23 @@ function room_of_player($state, $pid) {
  * Одна проверка проходимости клетки в конкретной комнате: стена (grid==0),
  * целый объект или живой NPC той же комнаты блокируют.
  * (Exit-клетка проходима — через неё и ходят.)
+ * @param string $room_key канонический ID комнаты (ключ state['rooms']);
+ *        у JSON-карт поле room_id может отсутствовать — фильтры идём по ключу.
  */
-function room_cell_blocked($state, $room, $x, $y) {
+function room_cell_blocked($state, $room, $x, $y, $room_key = null) {
+    if ($room_key === null) $room_key = $room['room_id'] ?? null;
     if (!isValidPosition($x, $y)) return true;
     if ($room === null) return true; // комнаты нет — клетка недоступна
     $g = $room['grid'][$y][$x] ?? 0;
     if ((int)$g !== 1) return true;
     foreach ($state['objects'] as $obj) {
-        if (($obj['ROOM_ID'] ?? null) !== ($room['room_id'] ?? null)) continue;
+        if (($obj['ROOM_ID'] ?? null) !== $room_key) continue;
         if ($obj['STATUS'] === 'DESTROYED') continue;
         $pos = parseXY($obj['POSITION_XY']);
         if ($pos['x'] === $x && $pos['y'] === $y) return true;
     }
     foreach ($state['npcs'] as $npc) {
-        if (($npc['ROOM_ID'] ?? null) !== ($room['room_id'] ?? null)) continue;
+        if (($npc['ROOM_ID'] ?? null) !== $room_key) continue;
         if (in_array($npc['STATUS'], ['DESTROYED', 'DEATH', 'REMOVED'], true)) continue;
         $pos = parseXY($npc['POSITION_XY']);
         if ($pos['x'] === $x && $pos['y'] === $y) return true;
@@ -125,11 +128,12 @@ function room_candidate_cells($state, $room, $door_x, $door_y) {
  *     текущую, и конечную клетку — см. is_player_at_position);
  *   - если ничего не найдено — возвращается null (вызывающий решает).
  */
-function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid) {
+function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid, $room_key = null) {
     if ($room === null) return null;
+    if ($room_key === null) $room_key = $room['room_id'] ?? null;
     foreach (room_candidate_cells($state, $room, $door_x, $door_y) as $c) {
-        if (room_cell_blocked($state, $room, $c['x'], $c['y'])) continue;
-        if (is_player_at_position($state, $c['x'], $c['y'], $exclude_pid, $room['room_id'] ?? null)) continue;
+        if (room_cell_blocked($state, $room, $c['x'], $c['y'], $room_key)) continue;
+        if (is_player_at_position($state, $c['x'], $c['y'], $exclude_pid, $room_key)) continue;
         return formatXY($c['x'], $c['y']);
     }
     return null;
@@ -145,8 +149,11 @@ function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid) {
  *      обрывается, MOVE_*_TIME чистятся), STATUS → IDLE;
  *   2) ROOM_ID перезаписывается, позиция — ближайшая свободная клетка у двери
  *      новой комнаты (body-block исключён поиском следующей клетки);
- *   3) START_POSITION_XY обновляется (личная точка появления в новой комнате —
- *      её видит клиент и future-механики);
+ *   3) START_POSITION_XY НЕ трогаем: это ЯКОРЬ ЛИЧНОЙ СПАВН-КЛЕТКИ игрока
+ *      (из battledata.json / SPAWN_ROOM). Движение обновляет его как
+ *      «последнюю занятую клетку», поэтому при респауне респавн-система
+ *      (turn_update_death_animations → rooms_teleport respawn) возвращает
+ *      бойца ровно на его стартовую клетку в его SPAWN_ROOM;
  *   4) пишется лог боя (общий журнал — корректен для любой комнаты);
  *   5) эмитится fact-событие 'room.changed'.
  *
@@ -158,8 +165,16 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     $player = &$state['players'][$player_id];
     if (!$player) { unset($player); return ['success' => false, 'message' => 'Нет игрока']; }
     $from_room = $player['ROOM_ID'] ?? '';
+
+    // Респаун: если комната спавна не задана — остаёмся там, где умерли
+    // (прежнее поведение телепорта на START_POSITION_XY внутри своей карты).
+    if ($reason === 'respawn' && ($to_room_id === '' || $to_room_id === null)) {
+        $to_room_id = $from_room;
+    }
     if ($to_room_id === '' || $to_room_id === null) { unset($player); return ['success' => false, 'message' => 'Неизвестная комната']; }
-    if ($from_room === $to_room_id) { unset($player); return ['success' => false, 'message' => 'Та же комната']; }
+
+    // Та же комната — переносим только позицию (респаун на личную клетку старта).
+    $same_room = ($from_room === $to_room_id);
 
     $room = room_get($state, $to_room_id);
     if ($room === null) {
@@ -167,9 +182,13 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
         unset($player);
         return ['success' => false, 'message' => 'Комната не найдена'];
     }
+    // Ключ комнаты = её ID в состоянии (карты из state['rooms'] могут не иметь
+    // поля room_id — берём переданный $to_room_id, он канонический).
+    $room_key = $to_room_id;
 
-    // Точка появления у двери: предпочтительна из exit_rooms новой комнаты,
-    // иначе — любая её exit-клетка, иначе центр карты (страховка).
+    // Точка появления у двери: предпочтительна обратная дверь этой комнаты
+    // (exit_rooms["x,y"] = ОТКУДА пришли), иначе — любая её exit-клетка,
+    // иначе центр карты (страховка).
     $door = null;
     if ($reason === 'respawn') {
         // Респаун после смерти: появление у личной START_POSITION_XY (см. ниже),
@@ -187,7 +206,7 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
             }
         }
     }
-    if ($door === null) $door = [(int)floor($room['width'] / 2), (int)floor($room['height'] / 2)];
+    if ($door === null) $door = [(int)floor(($room['width'] ?? GRID_WIDTH) / 2), (int)floor(($room['height'] ?? GRID_HEIGHT) / 2)];
 
     // Если личная стартовая клетка (респаун) свободна — встаём ровно на неё
     $spawn_xy = null;
@@ -195,14 +214,14 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
         $start = $player['START_POSITION_XY'] ?? null;
         if ($start !== null) {
             $sp = parseXY($start);
-            if (!room_cell_blocked($state, $room, $sp['x'], $sp['y']) &&
-                !is_player_at_position($state, $sp['x'], $sp['y'], $player_id, $to_room_id)) {
+            if (!room_cell_blocked($state, $room, $sp['x'], $sp['y'], $room_key) &&
+                !is_player_at_position($state, $sp['x'], $sp['y'], $player_id, $room_key)) {
                 $spawn_xy = $start;
             }
         }
     }
     if ($spawn_xy === null) {
-        $spawn_xy = room_find_spawn_cell($state, $room, $door[0], $door[1], $player_id);
+        $spawn_xy = room_find_spawn_cell($state, $room, $door[0], $door[1], $player_id, $room_key);
     }
     if ($spawn_xy === null) {
         $state = world_log($state, "{$player_id}: переход в {$to_room_id} отменён — нет свободной клетки у двери");
@@ -215,8 +234,8 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     unset($player['MOVE_START_TIME'], $player['MOVE_END_TIME'], $player['MOVE_DISTANCE']);
     $player['ROOM_ID'] = $to_room_id;
     $player['CUR_POSITION_XY'] = $spawn_xy;
-    $player['START_POSITION_XY'] = $spawn_xy;
     $player['END_POSITION_XY'] = $spawn_xy;
+    // START_POSITION_XY — якорь личной спавн-клетки, НЕ перезаписываем.
     unset($player['DEATH_TIME'], $player['DECAY_TIME']); // на всякий случай: вне цепочки смерти
 
     $state = world_log($state, "{$player_id}: {$reason} — переход {$from_room} → {$to_room_id} на клетку ({$spawn_xy})");
