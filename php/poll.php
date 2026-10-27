@@ -168,13 +168,20 @@ function build_poll_response($state, $version, $player_id = null) {
         return $out;
     };
 
-    $npcs_out = [];
-    foreach ($state['npcs'] as $nid => $n) {
-        if (($n['ROOM_ID'] ?? '') === '' && $cur_room_id !== null && $cur_room_id !== '') {
-            $n['ROOM_ID'] = $cur_room_id;
+    // ★ NPC тоже фильтруются по комнате (как objects/traps). Раньше npc_list
+    // отдавался целиком: клиент рисовал турели вражеских спавнов поверх стен
+    // видимой комнаты (дублирование сущностей по совпадающим координатам).
+    // Страховка «NPC без ROOM_ID» сохранена: такой NPC относится к текущей
+    // комнате запроса (legacy-данные), но не ко всем комнатам сразу.
+    $npcs_by_room = function ($list) use ($cur_room_id) {
+        if ($cur_room_id === null || $cur_room_id === '') return $list;
+        $out = [];
+        foreach ($list as $k => $n) {
+            if (($n['ROOM_ID'] ?? '') === '') $n['ROOM_ID'] = $cur_room_id;
+            if ($n['ROOM_ID'] === $cur_room_id) $out[$k] = $n;
         }
-        $npcs_out[$nid] = $n;
-    }
+        return $out;
+    };
 
     return [
         'version' => $version,
@@ -184,7 +191,7 @@ function build_poll_response($state, $version, $player_id = null) {
         'grid' => $room['grid'] ?? [],
         'objects' => $by_room($state['objects']),
         'traps' => $by_room($state['traps']),
-        'npcs' => $npcs_out,
+        'npcs' => $npcs_by_room($state['npcs']),
         'players' => $players_out,
         'projectiles' => $state['projectiles'] ?? [],
         'log' => array_slice($state['log'], -30),
