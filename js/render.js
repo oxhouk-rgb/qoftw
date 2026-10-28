@@ -221,10 +221,17 @@ function renderGrid(data) {
             // остановлен ловушкой на клетке мины), досрочно завершаем
             // локальную анимацию движения — иначе «призрачный» rAF будет
             // тащить спрайт к прежней конечной точке поверх серверной позиции.
+            // ★ Но снимаем НЕ «впустую», а через catchUpMoveEnd: poll-ответ со
+            // снятым MOVING ехал до клиента ~RTT и всё это время спрайт шёл по
+            // старой траектории; простая установка на серверную клетку выглядела
+            // бы как телепорт/рывок в конце пути. catchUp либо мгновенно ставит
+            // бойца на END (если серверные часы уже прошли MOVE_END_TIME — путь
+            // по модели пройден), либо доленивает остаток маршрута плавно.
             if (entity && player.STATUS !== 'MOVING') {
                 state.animations.forEach((anim, key) => {
                     if (key.startsWith(`${pid}_`)) {
                         state.animations.delete(key);
+                        catchUpMoveEnd(pid, anim);
                     }
                 });
             }
@@ -270,6 +277,11 @@ function renderGrid(data) {
                 if (sCell && entity.parentElement !== sCell) {
                     entity.style.transition = 'none';
                     sCell.appendChild(entity);
+                    // ★ Сброс кэша клетки гистерезиса (см. ниже в ветке «не
+                    // двигается»: после мгновенного перехода dataset.animCx/animCy
+                    // устаревает и следующий путь начался бы с рывка-допрыгивания)
+                    delete entity.dataset.animCx;
+                    delete entity.dataset.animCy;
                 }
             }
 
@@ -312,17 +324,33 @@ function renderGrid(data) {
                 const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
                 
                 // Проверяем нет ли активной анимации для этого игрока
-                const hasAnimation = Array.from(state.animations.keys()).some(key => 
-                    key.startsWith(`${pid}_`)
-                );
-                
-                if (!hasAnimation) {
+                let pendingAnim = null;
+                let pendingKey = null;
+                state.animations.forEach((anim, key) => {
+                    if (key.startsWith(`${pid}_`)) { pendingAnim = anim; pendingKey = key; }
+                });
+
+                if (!pendingAnim) {
                     // Перемещаем без анимации на серверную позицию
                     entity.style.transform = '';
                     if (cell && entity.parentElement !== cell) {
                         entity.style.transition = 'none';
                         cell.appendChild(entity);
+                        // ★ Сбрасываем кэш клетки гистерезиса интерполяции: он
+                        // хранит клетку, в которой спрайт стоял при последней
+                        // rAF-анимации. После мгновенной перестановки div'а
+                        // (дверь/респаун/purge — сетка перестроена) следующий
+                        // animateMove иначе вычислял offset от СТАРОЙ клетки и
+                        // спрайт «допрыгивал» её рывком в начале нового пути.
+                        delete entity.dataset.animCx;
+                        delete entity.dataset.animCy;
                     }
+                } else if (serverTimeSec() >= pendingAnim.serverEndTime) {
+                    // ★ Анимация «дожила» до серверного финала ещё до следующего
+                    // poll-ответа: снимаем её и фиксируем позицию тем же мягким
+                    // способом (catchUp подтвердит END серверными часами).
+                    state.animations.delete(pendingKey);
+                    catchUpMoveEnd(pid, pendingAnim);
                 }
             }
         });

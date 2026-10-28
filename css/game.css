@@ -219,7 +219,11 @@ body {
     font-size: 0.6em;
     font-weight: bold;
     z-index: 10;
-    transition: all 0.3s ease;
+    /* ★ НЕ transition:all — он анимировал и transform, из-за чего каждый кадр
+       rAF-интерполяции движения «догонял» себя с задержкой 0.3s (дёрганье), а
+       мгновенные переходы (двери/респаун) превращались в пролет через всю карту.
+       Позиция спрайта полностью управляется JS (animateMove/catchUpMoveEnd). */
+    transition: background 0.2s, border-color 0.2s, opacity 0.2s;
     pointer-events: none;
 }
 
