@@ -63,9 +63,47 @@ async function initGame(playerId) {
 // === LONG POLLING ===
 
 /**
- * Запуск цикла long polling
+ * ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения).
+ *
+ * Причина бага: MOVE_START_TIME/MOVE_END_TIME — серверные microtime(true), а
+ * старая анимация считала прогресс от момента ПОЛУЧЕНИЯ ответа (performance.now
+ * при startMoveAnimation). Клиент всегда отстаёт от серверных часов примерно на
+ * задержку доставки ответа: движение начиналось с опозданием («стартовая пауза»),
+ * а к концу пути сервер уже переводил бойца в IDLE и сбрасывал локальную
+ * анимацию — спрайт «допрыгивал» финишную клетку рывком. Для хода в 1 клетку
+ * (MOVE_SPEED=3 → 0.33 с пути) эта лага ≈ мгновенному телепорту.
+ *
+ * Решение: хранить смещение clockOffsetMs (serverNow ≈ performance.now() + offset)
+ * и интерполировать движение по СЕРВЕРНЫМ часам (см. animation.js). Поле
+ * server_now фиксируется сервером в момент сборки ответа, поэтому offset
+ * автоматически содержит сетевую задержку.
+ *
+ * Фильтр выбросов: единичные TCP-лаги дают скачки raw-offset; они глушатся
+ * экспоненциальным сглаживанием в пределах окна 3×RTT (минимум 150 мс), а
+ * большие скачки принимаются мягко (50%), чтобы спрайты не телепортировались.
+ */
+function syncClock(serverNowSec, rttMs) {
+    if (typeof serverNowSec !== 'number' || !isFinite(serverNowSec)) return;
+    // server_now зафиксирован между отправкой и получением; центр окна ≈ сейчас − RTT/2
+    const rawOffset = serverNowSec * 1000 - (performance.now() - rttMs / 2);
+    state.lastServerNow = serverNowSec;
 
-// === LONG POLLING ===
+    if (!state.clockSet) {
+        state.clockOffsetMs = rawOffset;
+        state.clockLastRttMs = rttMs;
+        state.clockSet = true;
+        return;
+    }
+
+    const delta = rawOffset - state.clockOffsetMs;
+    const jitterWindow = Math.max(150, 3 * (state.clockLastRttMs || 0));
+    if (Math.abs(delta) <= jitterWindow) {
+        state.clockOffsetMs += delta * 0.25; // плавная фильтрация дрожащего значения
+    } else {
+        state.clockOffsetMs += delta * 0.5;  // резкий скачок — принимаем мягко
+    }
+    state.clockLastRttMs = rttMs;
+}
 
 /**
  * Запуск цикла long polling
@@ -81,6 +119,7 @@ function startPolling() {
  */
 async function poll() {
     if (!state.polling) return;
+    const pollStart = performance.now();
     
     try {
         const url = CONFIG.PHP_URL + 'poll.php?v=' + state.version + '&player=' + state.playerId;
@@ -106,6 +145,9 @@ async function poll() {
         }
         
         if (data && data.version) {
+            // ★ Часы движения: сверяемся до render(), чтобы анимации этого
+            // snapshot уже интерполировались по серверному времени.
+            syncClock(data.server_now, performance.now() - pollStart);
             state.version = data.version;
             state.data = data;
             render(data);
