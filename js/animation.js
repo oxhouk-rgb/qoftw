@@ -50,7 +50,39 @@ function updatePlayerEntity(entity, player) {
     // status-moving: он отключает CSS idle-bounce (animation:none), который
     // иначе перезаписывал бы inline transform движения — спрайт «прыгал» на
     // клетку назад посреди плавного маршрута.
-    if (Array.from(state.animations.keys()).some(k => k.startsWith(entity.dataset.playerId + '_'))) {
+    // ★ Дополнительно: пока живой rAF-цикл есть в state.moveRaf (кадр поставлен,
+    // но ещё не выполнен — окно между poll-ответом и первым кадром), анимация
+    // тоже считается идущей: без этой проверки один и тот же poll-ответ мог
+    // снять status-moving (сервер уже ответил IDLE), idle-bounce на пару кадров
+    // перекрывал transform, а следующий кадр animateMove возвращал класс —
+    // видимый подскок в конце пути именно при «изредка плавном, изредка рваном»
+    // совпадении таймингов.
+    const animPid = entity.dataset.playerId;
+    const hasLiveAnim = Array.from(state.animations.keys()).some(k => k.startsWith(animPid + '_'))
+        || Array.from(state.moveRaf.keys()).some(k => k.startsWith(animPid + '_'));
+    if (hasLiveAnim) {
+        entity.classList.add('status-moving');
+    }
+
+    // ★ Гасить idle-bounce надо НЕ только во время rAF-интерполяции, но и на
+    // время финальной CSS-скользки settleSpriteAtEnd (0.12 с после останова
+    // цикла). Иначе в этом окне спрайт уже без status-moving (сервер ответил
+    // IDLE) и без inline-transform, а keyframes idle-bounce перезапускаются
+    // С НУЛЯ (анимация снималась и вешалась обратно): спрайт за 0.12 с до
+    // скользки успевает отпрыгнуть translateY до −2px и назад — ровно тот
+    // «то есть, то нет» микроподскок перед самой последней клеткой, который
+    // невозможно поймать синхронизацией часов (он чисто CSS-ный).
+    // Решение: пока у спрайта жив dataset.settling (ставится/снимается в
+    // animation.js), статусная keyframe-анимация обязана быть выключена.
+    // ★ Тот же класс держим и на «стоянке в ожидании подтверждения сервера»:
+    // animateMove завершил интерполяцию точно по серверным часам, но следующий
+    // poll ещё не принёс STATUS=IDLE. Если в этом окне снять status-moving
+    // (например, долетел промежуточный ответ со СТАРЫМ MOVING — render тогда
+    // вообще не трогает ветку «не двигается»), idle-bounce стартует с нуля и
+    // спрайт подпрыгивает на −2px прямо перед фиксацией. Снимется автоматически
+    // следующим render'ом, когда сервер подтвердит не-MOVING (см. шапку функции:
+    // там pending-анимаций и settling-скользок уже нет).
+    if (entity.dataset.settling || entity.dataset.awaitServerIdle === '1') {
         entity.classList.add('status-moving');
     }
     
@@ -83,6 +115,36 @@ function updatePlayerEntity(entity, player) {
 }
 
 /**
+ * ★ Остановить rAF-цикл интерполяции, если он ещё не выполнился.
+ * Обязателен при любом снятии анимации (естественный финал, досрочный стоп
+ * из render, смена комнаты): иначе «висящий» в очереди кадрanimateMove
+ * продолжит писать transform в спрайт уже после его фиксации на клетке.
+ */
+function stopMoveLoop(animKey) {
+    const rafId = state.moveRaf.get(animKey);
+    if (rafId !== undefined) {
+        cancelAnimationFrame(rafId);
+        state.moveRaf.delete(animKey);
+    }
+}
+
+/**
+ * ★ Снять ВСЕ локальные анимации движения (пакетно, одним проходом).
+ * Используется render при смене комнаты и мгновенных переходах. Раньше эти
+ * места делали только state.animations.delete(...) без отмены rAF — кадры
+ * «осиротевших» циклов продолжает работать до конца серверного маршрута и
+ * дёргают спрайт поверх актуальной позиции.
+ */
+function stopAllMoveAnimations(pidPrefix) {
+    state.animations.forEach((anim, key) => {
+        if (!pidPrefix || key.startsWith(pidPrefix)) {
+            state.animations.delete(key);
+            stopMoveLoop(key);
+        }
+    });
+}
+
+/**
  * ★ Запустить анимацию перемещения для игрока (интерполяция по СЕРВЕРНЫМ часам).
  *
  * Серверные MOVE_START_TIME/MOVE_END_TIME приходят в poll-ответе с задержкой
@@ -97,15 +159,32 @@ function updatePlayerEntity(entity, player) {
  * (см. state.js/serverTimeSec), т.е. спрайт едет синхронно с серверной моделью.
  * Длительность берём строго из серверных меток (не из клиентской оценки), чтобы
  * финиш совпадал с серверным финалом движения.
+ *
+ * ★ Защита от наложения циклов: перезапуск той же траектории (catchUp или
+ * повторный poll) сначала ОТМЕНЯЕТ предыдущий rAF-кадр (stopMoveLoop) — иначе
+ * два независимых цикла писали бы в один спрайт, что само по себе выглядит
+ * как микродёрганье даже при идеальных часах.
  */
 function startMoveAnimation(playerId, startPos, endPos, serverStartTime, serverEndTime, animKey) {
     // Длительность в миллисекундах (серверная шкала — authoritative)
     const duration = (serverEndTime - serverStartTime) * 1000;
 
-    // Класс status-moving сразу при старте (см. updatePlayerEntity): гасит
+    // ★ Класс status-moving сразу при старте (см. updatePlayerEntity): гасит
     // idle-bounce/keyframes, перекрывающие translate интерполяции.
+    // Перезапуск интерполяции (catchUp-доленивание, новый poll по той же
+    // траектории) обязан сбросить и финальную скользку предыдущего цикла:
+    // висевший transition 0.12s «подтормаживал» первые кадры rAF-анимации
+    // (каждый кадр догонял сам себя), а живой settling-маркер держал
+    // status-moving уже после старта нового движения — безвредно по классу,
+    // но transition по transform здесь заметен глазами.
     const animEntity = document.querySelector(`[data-player-id="${playerId}"]`);
-    if (animEntity) animEntity.classList.add('status-moving');
+    if (animEntity) {
+        animEntity.classList.add('status-moving');
+        clearSettleState(animEntity);
+    }
+
+    // Отменяем возможный предыдущий цикл по этому же ключу (см. шапку функции)
+    stopMoveLoop(animKey);
 
     // Сохраняем анимацию с серверными временами
     state.animations.set(animKey, {
@@ -128,8 +207,11 @@ function startMoveAnimation(playerId, startPos, endPos, serverStartTime, serverE
  * часам: serverTimeSec(performance.now()) ↔ шкала microtime(true) сервера.
  */
 function animateMove(animKey) {
+    // Кадр выполнен — id больше не актуален (следующий запишем при продлении)
+    state.moveRaf.delete(animKey);
+
     const anim = state.animations.get(animKey);
-    if (!anim) return;
+    if (!anim) return; // цикл снят снаружи (render/catchUp) — молча выходим
 
     // Вычисляем серверный прогресс этого кадра (компенсирует задержку доставки
     // poll-ответа: движение начинается сразу с той точки маршрута, где боец
@@ -145,6 +227,15 @@ function animateMove(animKey) {
     if (!entity) {
         state.animations.delete(animKey);
         return;
+    }
+
+    // ★ Подстраховка от рассинхрона классов статуса: render мог за кадр снять
+    // status-moving (сервер ответил IDLE раньше, чем завершилась наша
+    // интерполяция) — тогда CSS idle-bounce со своим animation-fill перезаписал
+    // бы inline transform и спрайт «прыгнул» на пару пикселей вверх посреди
+    // пути. Возвращаем гасящий класс, пока цикл жив.
+    if (!entity.classList.contains('status-moving')) {
+        entity.classList.add('status-moving');
     }
 
     // Вычисляем текущую позицию (линейная интерполяция)
@@ -194,11 +285,16 @@ function animateMove(animKey) {
 
     // Продолжаем анимацию если не завершена
     if (progress < 1) {
-        requestAnimationFrame(() => animateMove(animKey));
+        // ★ id кадра сохраняем в state.moveRaf — stopMoveLoop может отменить
+        // цикл, ещё не успевший выполниться ни разу (гонка catchUp/restart).
+        state.moveRaf.set(animKey, requestAnimationFrame(() => animateMove(animKey)));
     } else {
-        // Анимация завершена - убираем transform (отражение обеспечивает класс turn-left через CSS)
-        entity.style.transform = '';
         state.animations.delete(animKey);
+
+        // ★ Не трогаем status-moving: его снимет следующий render по серверному
+        // STATUS. Принудительное снятие здесь возвращало idle-bounce до
+        // подтверждения сервера, а любое последующее доленивание пути restarting
+        // анимацией выглядело бы как подскок.
 
         // Синхронизируем позицию и направление с сервером (если есть данные).
         // ★ Если сервер ещё не подтвердил финал (CUR != END — его тик/ответ в
@@ -210,14 +306,152 @@ function animateMove(animKey) {
             applyTurnClass(entity, player.TURN);
             const finalPos = parseXY(player.CUR_POSITION_XY);
             if (finalPos.x === anim.endPos.x && finalPos.y === anim.endPos.y) {
-                const finalCell = document.getElementById(`cell-${finalPos.x}-${finalPos.y}`);
-                if (finalCell && entity.parentElement !== finalCell) {
-                    entity.style.transition = 'none';
-                    finalCell.appendChild(entity);
-                }
+                // Сервер подтвердил END: мягко прибиваем спрайт к центру клетки
+                // (settleSpriteAtEnd сам решит — мгновенно снять микросмещение
+                // или доехать остаток за короткую скользку).
+                settleSpriteAtEnd(entity, finalPos);
+            } else {
+                // Финал ещё не подтверждён — оставляем чистый transform-0:
+                // отражение обеспечит класс turn-left (CSS), idle-bounce погашен
+                // status-moving; спрайт ровно стоит на END до следующего poll.
+                clearSettleState(entity);
+                entity.style.transition = 'none';
+                entity.style.transform = '';
+                // ★ Маркер «стоим на END, ждём подтверждения сервера». Без него
+                // следующий render (STATUS всё ещё MOVING — IDLE-ответ в пути)
+                // вызывает updatePlayerEntity, тот снимает status-moving и
+                // навешивает status-idle: idle-bounce стартует С НУЛЯ прямо на
+                // финишной клетке — спрайт подпрыгивает translateY(-2px) и
+                // назад. Класс держится, пока не придёт ответ с не-MOVING
+                // (снимется в remove-строке updatePlayerEntity / clearSettleState).
+                entity.dataset.awaitServerIdle = '1';
             }
+        } else {
+            clearSettleState(entity);
+            entity.style.transition = 'none';
+            entity.style.transform = '';
         }
     }
+}
+
+/**
+ * ★ Финальная CSS-скользка transform (0.12 с linear) — общий механизм для
+ * settleSpriteAtEnd и FLIP-старта в render.js.
+ *
+ * Лечит последний видимый дефект «то есть, то нет» на финише пути: раньше
+ * здесь стоял setTimeout(…, 160), который глушил transition «на всякий случай».
+ * Если за эти 160 мс приходил следующий poll-ответ, он мог ДОСРОЧНО поставить
+ * entity.style.transition='none' (ветки мгновенной фиксации в render/animation)
+ * — недоигранная скользка обрывалась на середине и остаток (~несколько px)
+ * доматывался мгновенно: микро-рывок ровно перед последней клеткой. Теперь
+ * сброс transition выполняется ИСКЛЮЧИТЕЛЬНО по событию transitionend (плюс
+ * страховка по времени, если событие не пришло — скрытая вкладка и т.п.).
+ *
+ * dataset.settling — маркер для updatePlayerEntity: пока скользка жива, на
+ * спрайте держится status-moving (гасит idle-bounce/keyframes, которые иначе
+ * перезапускаются с нуля в этом окне и дают подскок −2px).
+ */
+function glideTransform(entity, finalTransform) {
+    delete entity.dataset.settling; // новый цикл — новый таймер
+    entity.style.transition = 'transform 0.12s linear';
+    entity.style.transform = finalTransform;
+    entity.dataset.settling = '1';
+    const finish = () => {
+        if (entity.dataset.settling !== '1') return; // цикл уже снят/перезапущен
+        delete entity.dataset.settling;
+        entity.style.transition = 'none';
+    };
+    // transitionend всплывает от дочерних элементов (HP-бары имеют свои
+    // width-переходы) — фильтруем по propertyNamе, чтобы не снять скользку
+    // досрочно чужим событием.
+    entity.addEventListener('transitionend', function onEnd(e) {
+        if (e.target === entity && e.propertyName === 'transform') {
+            entity.removeEventListener('transitionend', onEnd);
+            finish();
+        }
+    });
+    // Страховка: transitionend не приходит, если элемент скрыт/удалён или
+    // браузер прервал кадр. 300 мс > 0.12 с с запасом; досрочного обрыва больше
+    // нет — все «мгновенные» ветки сами снимают settling до записи transition.
+    setTimeout(finish, 300);
+}
+
+/**
+ * ★ Снять финальную скользку/маркер ожидания у спрайта (вызывается из любой
+ * «мгновенной» ветки позиционирования ДО записи transition='none'/transform='').
+ * Без этого висевший transition доедал мгновенную установку позиции (спрайт
+ * «проезжал» лишние клетки по инерции недоигранной скользки), а живой
+ * dataset.settling бессменно держал status-moving поверх актуального статуса.
+ */
+function clearSettleState(entity) {
+    delete entity.dataset.settling;
+    delete entity.dataset.awaitServerIdle;
+}
+
+/**
+ * ★ Зафиксировать спрайт на клетке endPos (общий финал catchUpMoveEnd и
+ * «мягкого» завершения animateMove).
+ *
+ * Лечит рывок в КОНЦЕ пути: раньше установка на серверную клетку была строго
+ * мгновенной (transform='' + appendChild). Если по интерполяции боец ещё не
+ * доехал до END (часы slightly отстают, poll-ответ с финалом опоздал), спрайт
+ * «допрыгивал» остаток — при ходе на 1 клетку почти телепорт. Теперь остаток
+ * пути (если он больше трети клетки) домноляется короткой CSS-скользкой той же
+ * серверной длительности: движение продолжается плавно ровно до END, а не
+ * обрывается и не доскакивает.
+ */
+function settleSpriteAtEnd(entity, endPos) {
+    const cell = document.getElementById(`cell-${endPos.x}-${endPos.y}`);
+    if (!cell) return;
+
+    const grid = document.getElementById('grid-container');
+    // Спрайт уже прибит к нужной клетке — достаточно снять смещение.
+    // Если offset мал (< трети клетки) — убираем его мгновенно: скользка на
+    // 1-2 пикселя сама выглядела бы как микродрожание. Если велик (часы
+    // отстали, спрайт не доехал) — короткая CSS-скользка к центру клетки.
+    if (entity.parentElement === cell) {
+        clearSettleState(entity);
+        const m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(entity.style.transform || '');
+        const offX = m ? Math.abs(parseFloat(m[1])) : 0;
+        const offY = m ? Math.abs(parseFloat(m[2])) : 0;
+        if (offX > CONFIG.CELL_SIZE / 3 || offY > CONFIG.CELL_SIZE / 3) {
+            glideTransform(entity, '');
+        } else {
+            entity.style.transition = 'none';
+            entity.style.transform = '';
+        }
+        delete entity.dataset.animCx;
+        delete entity.dataset.animCy;
+        return;
+    }
+
+    // Клетка в текущей сетке — перестёлкиваемся с сохранением экранных
+    // координат: transform компенсирует разницу старой и новой клеток,
+    // затем за CSS-скользку обнуляем её → непрерывное продолжение пути.
+    if (cell.parentElement === grid && entity.offsetParent) {
+        clearSettleState(entity);
+        const oldRect = entity.getBoundingClientRect();
+        entity.style.transition = 'none';
+        entity.style.transform = '';
+        cell.appendChild(entity);
+        const newRect = entity.getBoundingClientRect();
+        const dx = oldRect.left - newRect.left;
+        const dy = oldRect.top - newRect.top;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            const flip = entity.classList.contains('turn-left') ? ' scaleX(-1)' : '';
+            entity.style.transform = `translate(${dx}px, ${dy}px)` + flip;
+            void entity.offsetWidth; // форсируем reflow — стартовая точка кадра зафиксирована
+            glideTransform(entity, flip.trim() ? flip.trim() : '');
+        }
+    } else {
+        // Страховка (клетка вне видимой сетки): прежнее мгновенное поведение
+        clearSettleState(entity);
+        entity.style.transition = 'none';
+        entity.style.transform = '';
+        cell.appendChild(entity);
+    }
+    delete entity.dataset.animCx; // кэш клетки гистерезиса устарел
+    delete entity.dataset.animCy;
 }
 
 /**
@@ -242,15 +476,9 @@ function catchUpMoveEnd(pid, anim) {
     const finishedByServer = player.MOVE_END_TIME && snapServerNow >= player.MOVE_END_TIME;
 
     if (finishedByServer || !player.MOVE_START_TIME || !player.MOVE_END_TIME) {
-        // Финал подтверждён серверными часами — мгновенная точная установка
-        entity.style.transition = 'none';
-        entity.style.transform = '';
-        const cell = document.getElementById(`cell-${endPos.x}-${endPos.y}`);
-        if (cell && entity.parentElement !== cell) {
-            cell.appendChild(entity);
-            delete entity.dataset.animCx; // кэш клетки гистерезиса устарел
-            delete entity.dataset.animCy;
-        }
+        // Финал подтверждён серверными часами — точная установка на END
+        // (через мягкую скользку, если спрайт ещё не доехал — см. settleSpriteAtEnd)
+        settleSpriteAtEnd(entity, endPos);
         applyTurnClass(entity, player.TURN);
         return;
     }

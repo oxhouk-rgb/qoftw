@@ -109,9 +109,13 @@ function renderGrid(data) {
     // SPAWN_ROOM) сбрасываем локальные анимации движения — иначе «призрачный»
     // rAF interpolation тащит спрайт от клетки старой комнаты к координатам
     // новой поверх серверной позиции.
+    // ★ stopAllMoveAnimations, а не просто animations.clear(): у каждой снятой
+    // анимации ОБЯЗАТЕЛЬНО отменяется её rAF-кадр, иначе «осиротевший» цикл
+    // дописывает transform в спрайт после перестройки сетки (дёрганье сразу
+    // после перехода в дверь).
     const roomChanged = state.lastRoomId !== null && data.room_id && data.room_id !== state.lastRoomId;
     if (roomChanged) {
-        state.animations.clear();
+        stopAllMoveAnimations(null);
     }
     if (data.room_id) state.lastRoomId = data.room_id;
 
@@ -231,6 +235,8 @@ function renderGrid(data) {
                 state.animations.forEach((anim, key) => {
                     if (key.startsWith(`${pid}_`)) {
                         state.animations.delete(key);
+                        stopMoveLoop(key); // ★ без отмены кадра цикл продолжит
+                                           // писать transform после catchUp
                         catchUpMoveEnd(pid, anim);
                     }
                 });
@@ -268,14 +274,16 @@ function renderGrid(data) {
                 (player.START_POSITION_XY === player.END_POSITION_XY ||
                  player.END_POSITION_XY === player.CUR_POSITION_XY);
             if (instantMove) {
-                state.animations.forEach((anim, key) => {
-                    if (key.startsWith(`${pid}_`)) state.animations.delete(key);
-                });
+                // Снимаем старые траектории ВМЕСТЕ с их rAF-кадрами: delete без
+                // stopMoveLoop оставлял висящий кадр, который дёргал спрайт уже
+                // после мгновенной установки на серверную клетку.
+                stopAllMoveAnimations(`${pid}_`);
                 const sPos = parseXY(player.CUR_POSITION_XY);
                 const sCell = document.getElementById('cell-' + sPos.x + '-' + sPos.y);
+                clearSettleState(entity); // мгновенная фиксация — недоигранная скользка недопустима
+                entity.style.transition = 'none';
                 entity.style.transform = '';
                 if (sCell && entity.parentElement !== sCell) {
-                    entity.style.transition = 'none';
                     sCell.appendChild(entity);
                     // ★ Сброс кэша клетки гистерезиса (см. ниже в ветке «не
                     // двигается»: после мгновенного перехода dataset.animCx/animCy
@@ -305,16 +313,63 @@ function renderGrid(data) {
                 
                 // Проверяем не запущена ли уже эта анимация
                 if (!state.animations.has(animKey)) {
-                    // Удаляем старые анимации для этого игрока
-                    state.animations.forEach((anim, key) => {
-                        if (key.startsWith(`${pid}_`)) {
-                            state.animations.delete(key);
-                        }
-                    });
-                    
+                    // ★ Снимаем старые анимации этого игрока ВМЕСТЕ с их
+                    // rAF-циклами (stopAllMoveAnimations): раньше был только
+                    // delete из Map — старый цикл продолжал жить и писал в
+                    // transform параллельно с новым. Два независимых цикла по
+                    // одному спрайту = микродёрганье даже при точных часах.
+                    stopAllMoveAnimations(`${pid}_`);
+
                     // Мгновенно доворачиваем спрайт по серверному TURN (не дожидаясь следующего поллинга)
                     applyTurnClass(entity, player.TURN);
-                    
+
+                    // ★ Непрерывность старта: если спрайт сейчас стоит НЕ на
+                    // стартовой клетке нового маршрута (предыдущий ход ещё не
+                    // «доехал» визуально или позиция отстала), мгновенная
+                    // перестановка + обнуление transform = рывок в начале пути.
+                    // FLIP-приём: ставим div на новую клетку, но визуальным
+                    // пиксельным сдвигом возвращаем спрайт на прежнее экранное
+                    // место, затем за короткую линейную скользку доезжаем до
+                    // точки серверной интерполяции — старт непрерывен.
+                    const startPosRect = (() => {
+                        const sc = document.getElementById(`cell-${startPos.x}-${startPos.y}`);
+                        return sc && entity.parentElement !== sc ? { cell: sc } : null;
+                    })();
+                    if (startPosRect) {
+                        clearSettleState(entity); // старт нового пути важнее недоигранной скользки прошлого
+                        const oldRect = entity.getBoundingClientRect();
+                        entity.style.transition = 'none';
+                        entity.style.transform = '';
+                        startPosRect.cell.appendChild(entity);
+                        const newRect = entity.getBoundingClientRect();
+                        const dx = oldRect.left - newRect.left;
+                        const dy = oldRect.top - newRect.top;
+                        const nowS = serverTimeSec();
+                        const p0 = Math.max(0, Math.min(1,
+                            (player.MOVE_END_TIME > player.MOVE_START_TIME)
+                                ? (nowS - player.MOVE_START_TIME) / (player.MOVE_END_TIME - player.MOVE_START_TIME)
+                                : 0));
+                        const tgtX = startPos.x + (endPos.x - startPos.x) * p0;
+                        const tgtY = startPos.y + (endPos.y - startPos.y) * p0;
+                        const destPx = (tgtX - startPos.x) * CONFIG.CELL_SIZE;
+                        const destPy = (tgtY - startPos.y) * CONFIG.CELL_SIZE;
+                        const flipCls = entity.classList.contains('turn-left') ? ' scaleX(-1)' : '';
+                        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                            entity.dataset.animCx = startPos.x;
+                            entity.dataset.animCy = startPos.y;
+                            entity.style.transform = `translate(${dx}px, ${dy}px)` + flipCls;
+                            void entity.offsetWidth; // reflow: стартовая точка кадра зафиксирована
+                            // ★ Скользка — через glideTransform (transitionend, а
+                            // не setTimeout): старый таймер на 160 мс мог быть
+                            // перехвачен следующим poll'ом и оборвать FLIP на
+                            // середине — тот же класс микро-рывка, что и на финише.
+                            glideTransform(entity, `translate(${destPx}px, ${destPy}px)` + flipCls);
+                        } else {
+                            delete entity.dataset.animCx;
+                            delete entity.dataset.animCy;
+                        }
+                    }
+
                     // Запускаем новую анимацию
                     startMoveAnimation(pid, startPos, endPos, player.MOVE_START_TIME, player.MOVE_END_TIME, animKey);
                 }
@@ -332,6 +387,7 @@ function renderGrid(data) {
 
                 if (!pendingAnim) {
                     // Перемещаем без анимации на серверную позицию
+                    clearSettleState(entity); // мгновенная фиксация — висящий transition недопустим
                     entity.style.transform = '';
                     if (cell && entity.parentElement !== cell) {
                         entity.style.transition = 'none';
