@@ -96,7 +96,14 @@
 | `objects.php` | NPC (зоны угрозы, LOS — пересчёт каждый ход) и ловушки; урон через единую цепочку `combat_apply_damage`; жёсткий фильтр целей: DEATH/DECAY не атакуется | `getAutonomousObjectDefinitions`, `calculateThreatZone`, `hasLineOfSightNPC`, слушатель `turn.start` (actions reset + threat) |
 | `rooms.php` | Мультикомнатный мир: сущности и игроки привязаны к комнате полем `ROOM_ID`; координатные сетки комнат ПЕРЕКРЫВАЮТСЯ (одна клетка x,y живёт в нескольких комнатах), поэтому ИЗОЛЯЦИЯ КОМНАТ — инвариант: любая проверка позиции (цели, лучи, AoE, зоны угрозы, ловушки, занятость клеток, проходимость) обязана фильтровать по `ROOM_ID`. Карта комнаты грузится лениво из `data/<ID>.json` в `state['rooms']` (в Redis лежат только «оседлавшие» мир комнаты); двери (`exits["x,y"]=КУДА`) — постоянный триггер вида LAND_MINE: наступил → мгновенный телепорт; `room.changed` — fact-событие шины после переноса | `room_get`, `room_of_player`, `room_cell_blocked`, `room_candidate_cells`, `room_find_spawn_cell`, `rooms_teleport(reason: exit/respawn)`, `rooms_check_exit_trigger`; poll отдаёт карту/объекты/ловушки/NPC только комнаты запросившего `?player=`; клиент (`game.js`) фильтрует отрисовку и проверки путей (`inCurrentRoom`, `rebuildGrid`, `purgeOutOfViewRoomEntities`) строго по `ROOM_ID` рисуемой комнаты — иначе «урон по пустой клетке задевает бойца в другой комнате» |
 
-### Клиент (`js/game.js`, ~1720 строк, vanilla JS)
+### Клиент (`js/*.js`, модули, vanilla JS; был единый game.js на 1724 строки — разбит)
+
+Модули (порядок загрузки в `game.html`): `config.js` (CONFIG), `state.js` (state + effectiveMoveRange),
+`utils.js` (showNotification, парсеры), `grid.js` (buildGrid/rebuildGrid/findEntity/inCurrentRoom/purge*),
+`path.js` (isPathClear/isCellFreeForMove/hasLineOfSight), `animation.js` (previewTurn/applyTurnClass/*MoveAnimation),
+`render.js` (render/renderGrid/create*Entity/render*UI/checkVictory), `input.js` (onCellClick/showActionDialog),
+`net.js` (initGame/startPolling/poll/sendAction), `main.js` (DOMContentLoaded — точка входа).
+Функции объявлены в глобальном скоупе обычными `<script>` — без сборщиков и ES-модулей (табу стека не нарушается).
 
 - `CONFIG.PHP_URL = 'php/'`, сетка 16×12 (`GRID_WIDTH/HEIGHT`), `CELL_SIZE=40` (дублирует серверные константы — см. §7; скорости клиента в `CONFIG` нет — анимация движения строится на временах хода `MOVE_START/END_TIME` из snapshot).
 - Жизненный цикл: выбор PLAYER* → `initGame()` (fetch `init.php`) → `startPolling()` → бесконечный
@@ -305,7 +312,7 @@ HTTP code). `error_reporting(0)` в config.php — **ошибки PHP в stdout 
 GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_REGEN_PER_TURN=1`,
 `LONG_POLL_TIMEOUT=25`; префикс `battle:` живёт в `engine/world.php`. В `config.php` игровых
 констант больше нет (исторический конфликт двойного определения → fatal 500, не возвращать).
-Клиент: `CONFIG` в `js/game.js` (GRID_*, CELL_SIZE) + `css/game.css` (размер клетки) —
+Клиент: `CONFIG` в `js/config.js` (GRID_*, CELL_SIZE) + `css/game.css` (размер клетки) —
 **при изменении сетки/скоростей синхронизировать вручную**; сервер отдаёт те же значения в поле
 `rules` ответов, но game.js их пока не читает (открытая задача миграции).
 Также дублируется формула TURN (`previewTurn()` ↔ `rules_turn_formula()`) — менять одновременно.

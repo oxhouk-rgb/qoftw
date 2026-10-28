@@ -79,6 +79,18 @@
         </div>
     </div>
 
-    <script src="js/game.js"></script>
+    <!-- Клиент разбит на модули (см. AGENTS.md §5). Порядок важен:
+         объявления функций hoist'ятся, но CONFIG/state должны быть первыми,
+         точка входа main.js — последней. Сборщики/npm не используются (табу стека). -->
+    <script src="js/config.js"></script>
+    <script src="js/state.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/grid.js"></script>
+    <script src="js/path.js"></script>
+    <script src="js/animation.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/input.js"></script>
+    <script src="js/net.js"></script>
+    <script src="js/main.js"></script>
 </body>
 </html>

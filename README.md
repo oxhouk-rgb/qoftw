@@ -26,7 +26,8 @@ redis-server
 ├── game.html           ← игровой клиент (основная страница игры)
 ├── diag.html           ← страница диагностики окружения
 ├── css/game.css        ← стили клиента
-├── js/game.js          ← клиент боевой системы (polling, рендер, ввод)
+├── js/                 ← клиент боевой системы, модули: config/state/utils/grid/
+│                             path/animation/render/input/net/main (polling, рендер, ввод)
 ├── data/
 │   ├── battledata.json       ← бойцы/объекты/ловушки/NPC + их комнаты старта
 │   ├── A1.json  A5.json      ← карты комнат-углов (стартовые позиции бойцов)
@@ -100,7 +101,7 @@ define('REDIS_DB', 0);
 
 ### Фронтенд
 
-- `game.html` + `js/game.js` + `css/game.css` — клиент игры: выбор персонажа, вызов `init.php`, цикл `poll.php?v=N&player=ID`, отправка действий в `action.php`, отрисовка сетки, анимации движения/снарядов/смерти, UI (HP/щит/ACTIONS, способности, лог).
+- `game.html` + `js/*.js` (модули клиента) + `css/game.css` — клиент игры: выбор персонажа, вызов `init.php`, цикл `poll.php?v=N&player=ID`, отправка действий в `action.php`, отрисовка сетки, анимации движения/снарядов/смерти, UI (HP/щит/ACTIONS, способности, лог).
 - `diag.html` — диагностика.
 
 ### Данные (`data/`)
