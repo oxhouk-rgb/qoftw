@@ -146,6 +146,101 @@ function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid, $ro
 }
 
 /**
+ * ★ Выделенная СПАВН-КЛЕТКА игрока в комнате — берётся НЕ из позиции смерти
+ * и НЕ из «последней занятой клетки», а из карты комнаты: JSON-файл
+ * data/<ID>.json, секция "spawn_cells": { "<НИК">: "<x>,<y>" }.
+ * Координата обозначена непосредственно в файле комнаты, поэтому её можно
+ * передвинуть (например, под будущий тайлсет спавн-комнат) без правок кода.
+ * Возвращает "x,y" или null — если для игрока клетка в этой комнате не
+ * назначена (или комната о ней ничего не знает).
+ */
+function room_defined_spawn_cell($room, $player_id) {
+    if ($room === null) return null;
+    $cells = $room['spawn_cells'] ?? null;
+    if (!is_array($cells)) return null;
+    $xy = $cells[$player_id] ?? null;
+    if (!is_string($xy) || $xy === '') return null;
+    return $xy;
+}
+
+/**
+ * ★ Личная СПАВН-КЛЕТКА бойца в его SPAWN_ROOM — конкретная ВЫДЕЛЕННАЯ клетка,
+ * обозначенная в карте комнаты (data/<ID>.json → "spawn_cells"), для появления
+ * после смерти И при первом запуске (а НЕ «те координаты, где погиб»):
+ *   1) выделенная клетка из "spawn_cells" комнаты, если она проходима, не
+ *      является дверью и сейчас не занята другим бойцом/NPC/объектом;
+ *   2) иначе — ближайшая СВОБОДНАЯ клетка ВОКРУГ выделенной (body-block соседа
+ *      не должен мешать воскреснуть «у своего дома»; порядок детерминирован);
+ *   3) если в комнате нет записи "spawn_cells" для игрока — ближайшая свободная
+ *      клетка вокруг личной START_POSITION_XY (legacy-поведение), а при её
+ *      отсутствии/чужой комнате — от центра комнаты (страховка).
+ * ★ ВАЖНО: "spawn_cells" НУЖНА ТОЛЬКО В СПАВН-КОМНАТАХ (A1/A5/E1/E5 — те, что
+ * указаны у игроков в SPAWN_ROOM). Для проходных комнат (хаб B1) её быть НЕ
+ * должно: при обычных переходах между комнатами (reason='exit') игрока размещает
+ * у обратной двери старый механизм room_find_spawn_cell — эта ветка кода
+ * спавн-клетки не касается и работает как прежде. Если же боец погибнет в чужой
+ * комнате, его всегда несёт в собственную SPAWN_ROOM (там запись есть), поэтому
+ * спавн-клетки в транзитных комнатах не требуются в принципе.
+ * На саму дверь спавн никогда не ставится: стоящий на exit-клетке боец при
+ * первом же тике получил бы повторный переход (порочный круг
+ * «респаун → сразу ушёл в B1»).
+ * Возвращает "x,y" или null (вызывающий решает).
+ */
+function room_player_spawn_cell($state, $room_key, $player_id) {
+    $player = $state['players'][$player_id] ?? null;
+    if (!$player || $room_key === null || $room_key === '') return null;
+    $room = room_get($state, $room_key);
+    if ($room === null) return null;
+
+    $is_exit = function ($xy) use ($room) {
+        return isset($room['exits'][$xy]) || isset($room['exit_rooms'][$xy]);
+    };
+    // Чёрный список: ВСЕ двери комнаты (кольцо кандидатов строится вокруг
+    // одной точки, но чужая дверь может попасть в радиус — см. rooms_teleport).
+    $forbidden = [];
+    foreach (array_merge(array_keys($room['exits'] ?? []),
+                         array_keys($room['exit_rooms'] ?? [])) as $xy) {
+        $forbidden[$xy] = true;
+    }
+
+    // ── 1) Выделенная спавн-клетка из файла комнаты ("spawn_cells") ──
+    $defined = room_defined_spawn_cell($room, $player_id);
+    if ($defined !== null && !$is_exit($defined)) {
+        $dp = parseXY($defined);
+        if (isValidPosition($dp['x'], $dp['y']) &&
+            !room_cell_blocked($state, $room, $dp['x'], $dp['y'], $room_key) &&
+            !is_player_at_position($state, $dp['x'], $dp['y'], $player_id, $room_key, true)) {
+            return $defined; // выделенная клетка свободна — встаём ровно на неё
+        }
+        // ── 2) Клетка занята/непроходима — ближайшее свободное кольцо вокруг НЕЁ
+        $near = room_find_spawn_cell($state, $room, $dp['x'], $dp['y'], $player_id, $room_key, $forbidden, $is_exit);
+        if ($near !== null) return $near;
+    }
+
+    // ── 3) Legacy-страховка: якорь = личная START_POSITION_XY (если относится
+    // к этой комнате), иначе — центр комнаты. ──
+    $anchor = null;
+    $start = $player['START_POSITION_XY'] ?? null;
+    $home = ($player['SPAWN_ROOM'] ?? '') === '' ? null : $player['SPAWN_ROOM'];
+    if ($start !== null && !$is_exit($start) && ($home === null || $home === $room_key)) {
+        $sp = parseXY($start);
+        if (isValidPosition($sp['x'], $sp['y'])) $anchor = [$sp['x'], $sp['y']];
+    }
+    if ($anchor === null) {
+        $anchor = [(int)floor(($room['width'] ?? GRID_WIDTH) / 2),
+                   (int)floor(($room['height'] ?? GRID_HEIGHT) / 2)];
+    }
+    $cell = room_find_spawn_cell($state, $room, $anchor[0], $anchor[1], $player_id, $room_key, $forbidden, $is_exit);
+    if ($cell !== null) return $cell;
+    $cx = (int)floor(($room['width'] ?? GRID_WIDTH) / 2);
+    $cy = (int)floor(($room['height'] ?? GRID_HEIGHT) / 2);
+    if ($cx !== $anchor[0] || $cy !== $anchor[1]) {
+        return room_find_spawn_cell($state, $room, $cx, $cy, $player_id, $room_key, $forbidden, $is_exit);
+    }
+    return null;
+}
+
+/**
  * ★ Перенос игрока в другую комнату (аналог срабатывания exit; используется и
  * для респауна после смерти). Идемпотентен по комнате: перенос в ту же, где
  * игрок уже стоит, не делает ничего.
@@ -155,11 +250,12 @@ function room_find_spawn_cell($state, $room, $door_x, $door_y, $exclude_pid, $ro
  *      обрывается, MOVE_*_TIME чистятся), STATUS → IDLE;
  *   2) ROOM_ID перезаписывается, позиция — ближайшая свободная клетка у двери
  *      новой комнаты (body-block исключён поиском следующей клетки);
- *   3) START_POSITION_XY НЕ трогаем: это ЯКОРЬ ЛИЧНОЙ СПАВН-КЛЕТКИ игрока
- *      (из battledata.json / SPAWN_ROOM). Движение обновляет его как
- *      «последнюю занятую клетку», поэтому при респауне респавн-система
- *      (turn_update_death_animations → rooms_teleport respawn) возвращает
- *      бойца ровно на его стартовую клетку в его SPAWN_ROOM;
+ *   3) START_POSITION_XY при обычном переходе (reason='exit') НЕ трогаем: это
+ *      ЯКОРЬ ЛИЧНОЙ СПАВН-КЛЕТКИ игрока (из battledata.json / SPAWN_ROOM).
+ *      ★ Респаун (reason='respawn') целится именно в этот якорь, но встаёт
+ *      на ВЫДЕЛЕННУЮ СВОБОДНУЮ КЛЕТКУ спавн-комнаты рядом с ним (см. ниже
+ *      «спавн-клетка»): боец возвращается в свою SPAWN_ROOM на конкретную
+ *      клетку, а не «в тех же координатах, где погиб»;
  *   4) пишется лог боя (общий журнал — корректен для любой комнаты);
  *   5) эмитится fact-событие 'room.changed'.
  *
@@ -208,23 +304,7 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     $is_exit = function ($xy) use ($room) {
         return isset($room['exits'][$xy]) || isset($room['exit_rooms'][$xy]);
     };
-    if ($reason === 'respawn') {
-        // Респаун после смерти: появление у личной START_POSITION_XY. Стартовая
-        // клетка сама является exit-клеткой (A1 "0,0" → B1 и т.п.) — тогда
-        // ориентир поиска смещаем на соседнюю клетку ВГЛУБЬ комнаты: стоящий на
-        // двери боец при первом же тике получил бы повторный переход из своей
-        // комнаты (порочный круг «респаун → сразу ушёл в B1»).
-        $sp = parseXY($player['START_POSITION_XY'] ?? '0,0');
-        if ($is_exit(formatXY($sp['x'], $sp['y']))) {
-            $cx = ($room['width'] ?? GRID_WIDTH) / 2 - 0.5;
-            $cy = ($room['height'] ?? GRID_HEIGHT) / 2 - 0.5;
-            $nudge_x = $sp['x'] + ($cx > $sp['x'] ? 1 : ($cx < $sp['x'] ? -1 : 0));
-            $nudge_y = $sp['y'] + ($cy > $sp['y'] ? 1 : ($cy < $sp['y'] ? -1 : 0));
-            $door_cells[] = [max(0, min(GRID_WIDTH - 1, $nudge_x)), max(0, min(GRID_HEIGHT - 1, $nudge_y))];
-        } else {
-            $door_cells[] = [$sp['x'], $sp['y']];
-        }
-    } else {
+    if ($reason !== 'respawn') {
         $er = $room['exit_rooms'] ?? [];
         foreach ($er as $key => $rr) {
             if ($rr === $from_room) { $p = parseXY($key); $door_cells[] = [$p['x'], $p['y']]; }
@@ -244,17 +324,15 @@ function rooms_teleport(&$state, $player_id, $to_room_id, $reason = 'exit') {
     $forbidden = [];
     foreach ($door_cells as $d) $forbidden[formatXY($d[0], $d[1])] = true;
 
-    // Если личная стартовая клетка (респаун) свободна — встаём ровно на неё
     $spawn_xy = null;
     if ($reason === 'respawn') {
-        $start = $player['START_POSITION_XY'] ?? null;
-        if ($start !== null && !$is_exit($start)) {
-            $sp = parseXY($start);
-            if (!room_cell_blocked($state, $room, $sp['x'], $sp['y'], $room_key) &&
-                !is_player_at_position($state, $sp['x'], $sp['y'], $player_id, $room_key, true)) {
-                $spawn_xy = $start;
-            }
-        }
+        // Респаун после смерти: появление на ВЫДЕЛЕННОЙ спавн-клетке своей
+        // SPAWN_ROOM (личная START_POSITION_XY, если она здесь и свободна;
+        // иначе ближайшая свободная клетка вокруг якоря/центра). Именно эта
+        // правка лечит баг «игрок воскресает в координатах смерти»: раньше
+        // ориентиром служила текущая позиция, а legacy-ветка turn_update_death_animations
+        // вообще оставляла бойца там, где он погиб.
+        $spawn_xy = room_player_spawn_cell($state, $room_key, $player_id);
     }
     if ($spawn_xy === null) {
         $spawn_xy = room_find_spawn_cell($state, $room, $door_cells[0][0], $door_cells[0][1], $player_id, $room_key, $forbidden, $is_exit);

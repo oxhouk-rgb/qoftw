@@ -229,5 +229,8 @@
   "stairs": {},
   "exit_rooms": {
     "15,0": "B1"
+  },
+  "spawn_cells": {
+    "PLAYER2": "8,6"
   }
 }
