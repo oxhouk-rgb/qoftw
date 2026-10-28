@@ -323,6 +323,17 @@ function buildGrid() {
 }
 
 /**
+ * ★ Перестроение поля при СМЕНЕ комнаты: то же, что buildGrid(), но вызывается
+ * из renderGrid(), когда poll-ответ принёс другую комнату. container.innerHTML
+ *='' удаляет старые клетки вместе со всеми «осиротевшими» div'ами сущностей
+ * прежней комнаты — это страховка поверх purgeOutOfViewRoomEntities():
+ * визуально в комнате никогда не остаётся ничего из другой комнаты.
+ */
+function rebuildGrid() {
+    buildGrid();
+}
+
+/**
  * ★ Найти DOM-элемент сущности СТРОГО внутри текущей видимой сетки.
  * Глобальный document.querySelector находил «сиротские» div'ы в старых
  * перестроенных сетках (после смены комнаты), поэтому объекты/NPC могли
@@ -373,14 +384,19 @@ function purgeOutOfViewRoomEntities(viewRoomId, keep) {
     if (!container) return;
     container.querySelectorAll('[data-player-id], [data-object-id], [data-trap-id], [data-npc-id]').forEach(el => {
         if (keep.has(el)) return;
-        // Свой div игрока НЕ удаляем по room-id: poll всегда отдаёт его
-        // комнату, а на переходе между комнатами div обязан пережить этот
-        // шаг renderGrid, чтобы плавно долететь до двери (см. анимации).
-        // Но если рендер создал НОВЫЙ div бойца (старый осиротел после
-        // респауна/смены комнаты), старый обязан быть удалён — иначе два
-        // спрайта одного игрока.
+        // Свой div игрока НЕ удаляем «вслепую»: раньше здесь стоял безусловный
+        // el.remove(), из-за чего purge сносил единственный спрайт своего
+        // бойца (зоны хода/атаки вокруг него оставались — они рисуются на
+        // клетках) и фигурка игрока исчезала совсем. Теперь удаляем только
+        // ДУБЛЬ: если в сетке уже есть другой div этого же id, официально
+        // подтверждённый этим poll-ответом (он добавлен в keep до вызова
+        // purge). Если официального div нет — текущий элемент храним как
+        // единственный спрайт своего игрока (переживёт смену комнаты и
+        // анимацию перехода).
         if (el.dataset.playerId && el.dataset.playerId === String(state.playerId)) {
-            el.remove();
+            const official = Array.from(keep).some(k =>
+                k !== el && k.dataset && k.dataset.playerId === el.dataset.playerId);
+            if (official) el.remove();
             return;
         }
         const rid = el.dataset.roomId;
@@ -1002,15 +1018,30 @@ function renderGrid(data) {
     });
     
     const room = data.room;
+    let roomGrid = room ? room.grid : null;
+    let roomExits = room ? room.exits : null;
+    let roomExitRooms = room ? room.exit_rooms : null;
 
     // ★ Мультикомнатный мир: при смене комнаты (переход в дверь/респаун в
     // SPAWN_ROOM) сбрасываем локальные анимации движения — иначе «призрачный»
     // rAF interpolation тащит спрайт от клетки старой комнаты к координатам
     // новой поверх серверной позиции.
-    if (state.lastRoomId !== null && data.room_id && data.room_id !== state.lastRoomId) {
+    const roomChanged = state.lastRoomId !== null && data.room_id && data.room_id !== state.lastRoomId;
+    if (roomChanged) {
         state.animations.clear();
     }
     if (data.room_id) state.lastRoomId = data.room_id;
+
+    // ★ При СМЕНЕ комнаты перестраиваем сетку заново: клетки получают новые
+    // обработчики кликов этой комнаты, а все div'ы сущностей старой комнаты
+    // гарантированно покидают DOM (иначе purge ниже мог бы «сохранить» спрайт
+    // своего игрока из прежней комнаты поверх чужой карты).
+    if (roomChanged) {
+        rebuildGrid();
+        // После перестроения клетки НОВЫЕ — стены/двери этого poll-ответа
+        // отрисуются на них ниже (цикл отрисовки стен идёт после rebuildGrid,
+        // новые клетки чисты по определению).
+    }
 
     // ★ Комната, которую РИСУЕМ сейчас (grid карты = её координатная сетка).
     const viewRoomId = data.room_id || null;
@@ -1028,11 +1059,11 @@ function renderGrid(data) {
     const inViewRoom = (e) => !viewRoomId || (e && e.ROOM_ID === viewRoomId);
     
     // Отрисовка стен
-    if (room && room.grid) {
+    if (roomGrid) {
         for (let y = 0; y < CONFIG.GRID_HEIGHT; y++) {
             for (let x = 0; x < CONFIG.GRID_WIDTH; x++) {
                 const cell = document.getElementById('cell-' + x + '-' + y);
-                if (room.grid[y] && room.grid[y][x] === 0) {
+                if (roomGrid[y] && roomGrid[y][x] === 0) {
                     cell.classList.add('wall');
                 } else {
                     cell.classList.remove('wall');
@@ -1043,23 +1074,23 @@ function renderGrid(data) {
         // Лестницы/двери между комнатами. Подписываем дверь названием комнаты
         // назначения (exits["x,y"] = КУДА; exit_rooms["x,y"] = ОТКУДА — обратная
         // дверь), чтобы игрок видел, куда ведёт переход.
-        if (room.exits) {
-            Object.keys(room.exits).forEach(key => {
+        if (roomExits) {
+            Object.keys(roomExits).forEach(key => {
                 const [x, y] = key.split(',').map(Number);
                 const cell = document.getElementById('cell-' + x + '-' + y);
                 if (cell) {
                     cell.classList.add('stair');
-                    cell.title = '-> ' + room.exits[key];
+                    cell.title = '-> ' + roomExits[key];
                 }
             });
         }
-        if (room.exit_rooms) {
-            Object.keys(room.exit_rooms).forEach(key => {
+        if (roomExitRooms) {
+            Object.keys(roomExitRooms).forEach(key => {
                 const [x, y] = key.split(',').map(Number);
                 const cell = document.getElementById('cell-' + x + '-' + y);
                 if (cell) {
                     cell.classList.add('stair');
-                    cell.title = 'из ' + room.exit_rooms[key];
+                    cell.title = 'из ' + roomExitRooms[key];
                 }
             });
         }
@@ -1158,6 +1189,15 @@ function renderGrid(data) {
                     sCell.appendChild(entity);
                 }
             }
+
+            // ★ Дивиденд purge-фильтра: div'ы бойцов, официально подтверждённых
+            // этим poll-ответом, попадают в whitelist. Без этого шага
+            // purgeOutOfViewRoomEntities() не мог отличить «оригинал» своего
+            // игрока от его же осиротевшего дубля и сносил единственный
+            // спрайт — фигурка своего игрока исчезала совсем (зоны хода/атаки
+            // при этом оставались, т.к. рисуются на клетках). Чужие бойцы
+            // фильтруются по data-room-id и без whitelist.
+            keptEntities.add(entity);
 
             // Обрабатываем перемещение
             if (!instantMove && player.STATUS === 'MOVING' && player.MOVE_START_TIME && player.MOVE_END_TIME && player.END_POSITION_XY !== player.CUR_POSITION_XY) {
