@@ -15,14 +15,6 @@ print("""# LLF.md — List of Low-Level Functions (индекс для LLM)
 > `grep -n "имя_функции" docs/LLF.md` → затем читать код по указанному file:line.
 """)
 
-HEADER_UNUSED = """
-
-> Автогенерируемый индекс: имя функции → файл:строка → назначение.
-> Обновлять после правок: `bash docs/gen_llf.sh`
-> Не читать этот файл целиком при задаче с одной функцией — делать grep по нему:
-> `grep -n "имя_функции" docs/LLF.md` → затем читать код по указанному file:line.
-"""
-
 def doc_line(src, i):
     """Ближайшая содержательная строка doc-комментария над определением на строке i."""
     j = i - 1
@@ -56,10 +48,15 @@ def scan(path):
                  re.match(r'\s*(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:function|\()', line))
         if m:
             name = m.group(1)
-            # пропускаем вложенные стрелочные/анонимные обёртки вида `const duration = ...`
-            if not php and '=' in line.split(m.group(1))[1][:20] and 'function' not in line and '(' not in line.split('=',1)[-1][:15]:
-                continue
-            out.append((name, i + 1, doc_line(src, i)))
+            if php:
+                out.append((name, i + 1, doc_line(src, i)))
+            else:
+                # индексируем только полноценные объявления функций;
+                # локальные стрелочные обёртки (const duration = (...) => ...) пропускаем
+                if re.match(r'\s*(?:async\s+)?function\s+[A-Za-z0-9_$]+\s*\(', line):
+                    out.append((name, i + 1, doc_line(src, i)))
+                elif re.match(r'\s*(?:const|let|var)\s+[A-Za-z0-9_$]+\s*=\s*async\s+function\b', line):
+                    out.append((name, i + 1, doc_line(src, i)))
     return out
 
 def section(title, files):

@@ -114,12 +114,6 @@ if (!function_exists('applyDamageToTarget')) {
     }
 }
 
-if (!function_exists('processNegatives')) {
-    function processNegatives(&$state, $player_id) {
-        effects_tick($state, $player_id);
-    }
-}
-
 if (!function_exists('applySplashDamage')) {
     function applySplashDamage(&$state, $attacker_id, $x, $y) {
         passives_on_attack_resolved($state, [

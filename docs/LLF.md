@@ -8,7 +8,7 @@
 
 ## Клиент (js/animation.js, js/config.js, js/grid.js, js/input.js, js/main.js, js/net.js, js/path.js, js/render.js, js/state.js, js/utils.js)
 
-### `js/animation.js` (8 фукн.)
+### `js/animation.js` (5 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -16,10 +16,7 @@
 | `applyTurnClass` | :30 | Применить отражение спрайта по направлению TURN. |
 | `updatePlayerEntity` | :38 | Обновить существующий элемент игрока |
 | `startMoveAnimation` | :81 | Запустить анимацию перемещения для игрока |
-| `duration` | :83 | Длительность в миллисекундах |
 | `animateMove` | :103 | Анимация перемещения (вызывается каждый кадр) |
-| `offsetX` | :125 |  |
-| `offsetY` | :126 |  |
 
 ### `js/grid.js` (5 фукн.)
 
@@ -58,14 +55,13 @@
 | `isCellFreeForMove` | :87 | Проверка свободна ли клетка для перемещения |
 | `hasLineOfSight` | :142 | Проверка линии видимости для способностей (может проходить через пустые клетки) |
 
-### `js/render.js` (14 фукн.)
+### `js/render.js` (13 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `render` | :7 | Отрисовка состояния |
 | `highlightPlayerZones` | :22 | Подсветка зон вокруг игрока |
 | `renderGrid` | :84 | Отрисовка сетки с сущностями |
-| `inViewRoom` | :142 | спавна «дублируется» во всех комнатах сразу (позиции совпадают). |
 | `createPlayerEntity` | :468 | Создать элемент игрока |
 | `createObjectEntity` | :527 | Создать элемент объекта |
 | `createTrapEntity` | :537 | Создать элемент ловушки |
@@ -95,7 +91,7 @@
 
 ## HTTP-слой (php/*.php)
 
-### `php/battle.php` (24 фукн.)
+### `php/battle.php` (23 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -117,12 +113,11 @@
 | `getTargetsInArea` | :100 |  |
 | `isCellPassable` | :106 |  |
 | `applyDamageToTarget` | :112 |  |
-| `processNegatives` | :118 |  |
-| `applySplashDamage` | :124 |  |
-| `applyInstantAbility` | :134 |  |
-| `applyBeamAbility` | :140 |  |
-| `applyLineAbility` | :146 |  |
-| `applyAreaAbility` | :152 |  |
+| `applySplashDamage` | :118 |  |
+| `applyInstantAbility` | :128 |  |
+| `applyBeamAbility` | :134 |  |
+| `applyLineAbility` | :140 |  |
+| `applyAreaAbility` | :146 |  |
 
 ### `php/config.php` (16 фукн.)
 
@@ -348,4 +343,4 @@
 | `test_crossroom_targeting` | :252 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
 
 
-<!-- Всего функций: 197 -->
+<!-- Всего функций: 192 -->
