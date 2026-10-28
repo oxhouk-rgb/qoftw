@@ -57,7 +57,8 @@
                                          │  JSON-хелперы (константы убраны)  │
                                          │ debug.php  — диагностика движка   │
                                          └──────────────────────────────────┘
-Данные (статические): data/battledata.json (игроки/объекты/ловушки/NPC), data/B1.json (карта 16×12)
+Данные (статические): data/battledata.json (игроки/объекты/ловушки/NPC с ROOM_ID),
+                                     data/A1|A5|B1|E1|E5.json (карты комнат 16×12 + двери)
 ```
 
 ### PHP-модули: HTTP-слой (`php/*.php`)
@@ -65,7 +66,7 @@
 | Файл | Роль | Ключевые функции |
 |------|------|------------------|
 | `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`) | `getRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `setCorsHeaders()` |
-| `init.php` | Тонкий эндпоинт: читает `data/battledata.json` + `data/B1.json` (комната из `ROOM_ID`), считает `THREAT_ZONE` NPC, вызывает `world_init()`; в ответе отдаёт клиенту `rules` + реестры abilities/passives/effects | вызывается клиентом при выборе персонажа |
+| `init.php` | Тонкий эндпоинт: читает `data/battledata.json`, определяет «legacy-комнату» (`state['room']`) — комнату с объектами/ловушками/NPC (на стенде B1), иначе первую player-комнату, грузит её карту `data/<ID>.json`, считает `THREAT_ZONE` NPC, вызывает `world_init()`; остальные комнаты подхватываются лениво (`room_get`). В ответе отдаёт клиенту `rules` + реестры abilities/passives/effects | вызывается клиентом при выборе персонажа |
 | `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`) | `require bootstrap.php` |
 | `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
 | `battle.php` | **Фасад обратной совместимости**: подключает `engine/rules.php` + `bootstrap.php`, содержит делегаты со всеми старыми именами (`processMove`, `processAttack`, `updateMovements`, `checkVictory`, …). Новый код здесь не писать | legacy-алиасы |
@@ -93,9 +94,9 @@
 | `targeting.php` | Универсальный доступ к сущностям + правила проходимости клеток | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты; `is_cell_passable()` (стены/целые объекты/живые NPC блокируют), `is_player_at_position()` (DEATH/DECAY/REMOVED клетку не занимают) |
 | `abilities.php` | Реестр способностей (формат данных не менялся) + исполнение через единые сервисы combat/movement/effects | `getAbilityDefinitions`, `applyAbility` |
 | `objects.php` | NPC (зоны угрозы, LOS — пересчёт каждый ход) и ловушки; урон через единую цепочку `combat_apply_damage`; жёсткий фильтр целей: DEATH/DECAY не атакуется | `getAutonomousObjectDefinitions`, `calculateThreatZone`, `hasLineOfSightNPC`, слушатель `turn.start` (actions reset + threat) |
-| `rooms.php` | Мультикомнатный мир: сущности и игроки привязаны к комнате полем `ROOM_ID`; координатные сетки комнат ПЕРЕКРЫВАЮТСЯ (одна клетка x,y живёт в нескольких комнатах), поэтому ИЗОЛЯЦИЯ КОМНАТ — инвариант: любая проверка позиции (цели, лучи, AoE, зоны угрозы, ловушки, занятость клеток, проходимость) обязана фильтровать по `ROOM_ID`. Карта комнаты грузится лениво в `state['rooms']` | `room_get`, `rooms_teleport(reason: exit/respawn)`, `room_find_free_cell`; poll отдаёт карту/объекты/ловушки/NPC только комнаты запросившего `?player=`; клиент (`game.js`) фильтрует отрисовку и проверки путей (`inCurrentRoom`) строго по `ROOM_ID` рисуемой комнаты — иначе «урон по пустой клетке задевает бойца в другой комнате» |
+| `rooms.php` | Мультикомнатный мир: сущности и игроки привязаны к комнате полем `ROOM_ID`; координатные сетки комнат ПЕРЕКРЫВАЮТСЯ (одна клетка x,y живёт в нескольких комнатах), поэтому ИЗОЛЯЦИЯ КОМНАТ — инвариант: любая проверка позиции (цели, лучи, AoE, зоны угрозы, ловушки, занятость клеток, проходимость) обязана фильтровать по `ROOM_ID`. Карта комнаты грузится лениво из `data/<ID>.json` в `state['rooms']` (в Redis лежат только «оседлавшие» мир комнаты); двери (`exits["x,y"]=КУДА`) — постоянный триггер вида LAND_MINE: наступил → мгновенный телепорт; `room.changed` — fact-событие шины после переноса | `room_get`, `room_of_player`, `room_cell_blocked`, `room_candidate_cells`, `room_find_spawn_cell`, `rooms_teleport(reason: exit/respawn)`, `rooms_check_exit_trigger`; poll отдаёт карту/объекты/ловушки/NPC только комнаты запросившего `?player=`; клиент (`game.js`) фильтрует отрисовку и проверки путей (`inCurrentRoom`, `rebuildGrid`, `purgeOutOfViewRoomEntities`) строго по `ROOM_ID` рисуемой комнаты — иначе «урон по пустой клетке задевает бойца в другой комнате» |
 
-### Клиент (`js/game.js`, ~1360 строк, vanilla JS)
+### Клиент (`js/game.js`, ~1720 строк, vanilla JS)
 
 - `CONFIG.PHP_URL = 'php/'`, сетка 16×12 (`GRID_WIDTH/HEIGHT`), `CELL_SIZE=40` (дублирует серверные константы — см. §7; скорости клиента в `CONFIG` нет — анимация движения строится на временах хода `MOVE_START/END_TIME` из snapshot).
 - Жизненный цикл: выбор PLAYER* → `initGame()` (fetch `init.php`) → `startPolling()` → бесконечный
@@ -108,6 +109,10 @@
   по `MOVE_START_TIME/MOVE_END_TIME` (авторитет — серверное время).
 - Клиент **не считает правила**; единственная «копия серверной формулы» — `previewTurn()`
   (мгновенное зеркаление спрайта до ответа poll; должна совпадать с `rules_turn_formula()`).
+- Комнатная изоляция отрисовки: snapshot приносит карту комнаты запросившего игрока
+  (`room`/`room_id`/`grid`); при смене `room_id` сетка перестраивается (`rebuildGrid`),
+  DOM-сущности чужой комнаты вычищаются (`purgeOutOfViewRoomEntities`), а все локальные
+  проверки путей и подсветки фильтруют сущности через `inCurrentRoom(e)` по `ROOM_ID`.
 - Локальные проверки пути (`isPathClear`, `isCellFreeForMove`, `hasLineOfSight`) — только для UX
   (подсветка/скрытие недоступных действий); финальная валидация всегда серверная.
 
@@ -117,9 +122,16 @@
   (наследие ТЗ): `HITPOINTS/MAX_HITPOINTS`, `SHIELD/MAX_SHIELD`, `ATTACK`, `RESISTANCE`,
   `ACTIONS/MAX_ACTIONS`, `RANGE`, `ABILITIES: ["ИМЯ[N]"]` (**N — дальность, не стоимость!**),
   `PASSIVES`, `NEGATIVES: ["ЭФФЕКТ[ходов]"]`, `ALLY`, `LIFE`, `SPAWN_ROOM`, `TURN`, `COLOR`,
-  `START/CUR/END_POSITION_XY` (строка `"x,y"`).
-- `B1.json`: `room_id`, `width/height`, `grid` (маска 0=проход/1=стена), `exits`, `stairs`
-  (переход между комнатами — **заглушка**, только логируется в `movement_update()`).
+  `ROOM_ID` (комната старта), `START/CUR/END_POSITION_XY` (строка `"x,y"`). У объектов/ловушек/NPC
+  тоже есть `ROOM_ID` — на стенде все они живут в центральном зале B1.
+- Карты комнат `A1.json`, `A5.json`, `B1.json`, `E1.json`, `E5.json` — единый формат:
+  `room_id`, `width/height`, `grid` (маска: **1 = проходима, 0 = стена/препятствие** — так же
+  трактуют сервер `room_cell_blocked()` и клиент), `exits` («x,y» → КУДА),
+  `exit_rooms` («x,y» → ОТКУДА, обратная дверь — по ней `rooms_teleport` выбирает, у какой
+  двери появляться входящему), `exit_positions` (эталонная клетка появления со стороны двери),
+  `stairs` (пусто во всех картах — вертикальные переходы не реализованы).
+  Переходы **работают**: наступил на exit-клетку → `movement_update` вызывает
+  `rooms_check_exit_trigger()` → мгновенный `rooms_teleport(..., 'exit')`.
 
 ## 3. Зависимости между PHP-модулями (граф require_once + событийная шина)
 
@@ -149,9 +161,10 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 | `movement.query_distance` | query | movement | passives (SWIFT), passives-адаптер эффектов SLOWED (p10, читает `effects_get_modifier`) |
 | `movement.interrupted` | fact | combat (прерывание при реальном уроне) | movement (остановка на текущей клетке) |
 | `turn.start` | fact | turn_start | turn (effects tick, p5), combat, passives (REGENERATION), objects (NPC actions reset + threat, p20) |
+| `room.changed` | fact | rooms_teleport (после успешного переноса: exit/respawn) | слушателей пока нет — событие зарезервировано для будущих подписчиков |
 
 Зарезервированы в каноническом списке шапки `events.php`, но слушателей пока нет:
-`trap.triggered`, `threat.entered`, `tick.server`, `victory.check`.
+`trap.triggered`, `threat.entered`, `tick.server`, `victory.check`, `room.changed`.
 
 Правила зависимостей (жесткие):
 - Эндпоинты требуют **только** `engine/bootstrap.php` (battle.php — фасад для legacy-имён).
@@ -178,10 +191,12 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
    `turn_start` + emit `turn.start`: passives/effects/combat/objects-слушатели) → `world_save`
    (incr version централизован в world_save; дедуп записей). Если version изменилась, отдаёт
    **полный flat snapshot**
-   (`version, rules, room, grid, objects, traps, npcs, players, projectiles, log[-30],
+   (`version, rules, room, room_id, grid, objects, traps, npcs, players, projectiles, log[-30],
    turn_time, turn_duration, time_to_next_turn, victory`) — КЛЮЧИ ОТВЕТА НА ВЕРХНЕМ УРОВНЕ,
    без обёртки `data` (клиентский `render(data)` читает `data.players` и т.д. напрямую;
-   исторический контракт). Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
+   исторический контракт). `room/room_id/grid` — карта комнаты запросившего `?player=`
+   (без параметра — legacy-карта `state['room']`), объекты/ловушки/NPC также отфильтрованы
+   по её `ROOM_ID`. Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
 3. **action**: клиент → `POST php/action.php` (JSON) → предварительная валидация (жив/не CC/AP) →
    функция systems мутирует `$state` (by-ref) → `world_save` (incr version) →
    все зависшие poll мгновенно отдают новый мир. Ошибки — JSON 400, не fatal.
@@ -191,12 +206,15 @@ battle.php(фасад)──┤   сборки: require +      php/engine/: rule
 
 ### Ключи Redis (префикс `battle:`)
 
-`players`, `objects`, `traps`, `npcs`, `room`, `turn_time`, `projectiles`, `version`, `log`
+`players`, `objects`, `traps`, `npcs`, `room` (legacy-карта единой комнаты — её пишет init.php,
+читают debug-пути и вызовы без room_id), `turn_time`, `projectiles`, `version`, `log`
 (последние 50 записей; клиенту отдаются последние 30), `world_move_now` (виртуальные часы
 движения, float-микровремя; обновляется каждый тик без инкремента версии), `action_acks`
 (hash журнал подтверждений применённых действий для идемпотентности retry-запросов из
-`action.php`; TTL `ACTION_ACK_TTL`, компакция при >2000 записей). Значения секций —
-JSON-строки, version/turn_time — int.
+`action.php`; TTL `ACTION_ACK_TTL`, компакция при >2000 записей). Мультикомнатный слой:
+`room:list` (JSON-массив ID комнат, реально «оседлавших» мир) и `room:<ID>` (JSON-карта каждой
+из них; пишутся/читаются только эти комнаты — остальные лежат на диске в `data/<ID>.json` и
+подхватываются лениво). Значения секций — JSON-строки, version/turn_time — int.
 
 ### Конкурентность (важно знать перед правками)
 
@@ -209,8 +227,11 @@ JSON-строки, version/turn_time — int.
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
 
 - **Сетка 16×12** (`GRID_WIDTH/HEIGHT`), координаты строкой `"x,y"`, дробные значения допускаются
-  в CUR во время движения (форматирует `formatXY`). Комната B1: стена в столбце 7, выходы `7,0→A1`,
-  `7,11→C1` (заглушка).
+  в CUR во время движения (форматирует `formatXY`). Мир — пять комнат (`data/<ID>.json`): центральный
+  зал B1 и угловые A1/A5/E1/E5. Двери B1: `0,0→A1`, `15,0→A5`, `0,11→E1`, `15,11→E5`; обратные двери
+  углов `0,0→B1`. Переходы реализованы (`rooms.php`: exit-триггер в финале `movement_update` →
+  `rooms_teleport(reason='exit')`), не заглушка. Поле `stairs` во всех картах пусто — вертикальных
+  переходов нет.
 - **Ход**: каждые `TURN_DURATION=5` с ACTIONS → MAX_ACTIONS (без накопления), щит +1 к максимуму,
   тик NEGATIVES (DoT BLEED/POISONED, счётчики), REGENERATION, восстановление ACTIONS NPC,
   перепроверка зон угрозы для стоящих игроков. Очерёдности нет — real-time со стоимостью 1 AP за
@@ -245,10 +266,12 @@ JSON-строки, version/turn_time — int.
   самоприменение не меняют. Клиент зеркалит через `scaleX(-1)` (класс `turn-left`). Правило CSS:
   новые keyframes либо только filter/box-shadow, либо домножение transform на
   `scaleX(var(--turn-flip))`, иначе сломают отражение. На геймплей TURN пока не влияет.
-- **Смерть**: DEATH(1с) → DECAY(1с) → при LIFE>0 респавн (полный reset HP/щита, строгий возврат на
-  стартовую позицию `START_POSITION_XY` — поиска свободной клетки рядом нет; SPAWN_ROOM='SPAWN' —
-  комнаты спавна нет, фактически revive в той же B1), иначе REMOVED (позиция не перестирается).
-  Клиент убирает div из DOM только при
+- **Смерть**: DEATH(1с) → DECAY(1с) → при LIFE>0 респавн (LIFE−1, полный reset HP/щита) через
+  `rooms_teleport(..., 'respawn')` в личную комнату `SPAWN_ROOM` (= комната старта бойца из
+  battledata.json: A1/A5/E1/E5) с подбором ближайшей свободной клетки вокруг `START_POSITION_XY`
+  (`room_find_spawn_cell`, защита от вставания на дверь/занятую клетку); если телепорт невозможен —
+  legacy-страховка: строгий возврат на `START_POSITION_XY` внутри текущей комнаты. Иначе REMOVED
+  (позиция не перестирается). Клиент убирает div из DOM только при
   REMOVED/возрождении. Статусы анимаций сбрасываются только сервером (`turn_update_death_animations`).
 - **Объекты/ловушки/NPC**: бочки имеют HP и блокируют клетки; **живой NPC (турель) — тоже
   непроходимое препятствие** (клетку занимает `is_cell_passable()`, после DESTROYED/DEATH/REMOVED
@@ -302,8 +325,9 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 - **Новый автономный объект (турель/мина/spawn-объект)** → только `systems/objects.php`:
   `getAutonomousObjectDefinitions()` + данные в battledata.json + поле `ALLY`; урон — через
   `combat_apply_damage`; реакция на ход — слушатель `turn.start`.
-- **Новая комната** → `data/ROOM_ID.json` по образцу B1.json + `exits` текущей + обработка перехода
-  в `updateMovements()` (сейчас там заглушка-лог).
+- **Новая комната** → `data/ROOM_ID.json` по образцу существующих (grid/exits/stairs/exit_positions)
+  + записи `exits` в картах соседних комнат; код править не нужно — карты подхватываются лениво
+  (`room_get`), двери работают через exit-триггер, спавн-кольцо строится из `exit_positions`.
 - **Новое действие** → функция в нужной системе `systems/*` + case-роутинг + валидация в
   `action.php` + кнопка/отправка в `game.js`. Правила никогда не считать на клиенте.
 - Любая мутация состояния → сохранение через `world_save()` (incr версии делает сам).
@@ -334,8 +358,9 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
     STATUS↔NEGATIVES поддерживается сам в `turn_tick` — не чинить статусы вручную в системах.
 11. Мёртвые/оглушённые не могут действовать (валидация в action.php) и не являются целями
     (фильтры DEATH/DECAY в objects/combat/targeting).
-12. Заглушки — не баги: межкомнатные переходы, комната SPAWN, интерактивные объекты, отсутствие
-    экипировки (подробно в ABOUT.md §7). «Чинить» их без задачи — вне объёма.
+12. Не «чинить» раньше времени: вертикальные переходы (лестницы/этажи), интерактивные объекты и
+    экипировка отсутствуют сознательно — это консервы, а не баги (подробно в ABOUT.md §7).
+    Межкомнатные переходы и респаун в SPAWN_ROOM уже реализованы — не считать их заглушками.
 13. После правок сервер не перезапускают: достаточно нового захода через init.php (пересобирает Redis).
 14. Фасад `battle.php` — только делегаты; новый код туда не писать, но и удалять legacy-имена
     нельзя (их ожидает часть пути диагностики/debug).
