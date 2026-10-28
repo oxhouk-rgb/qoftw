@@ -57,7 +57,7 @@ try {
         exit;
     }
 
-    $state = world_load();
+    [$state, $base_version] = world_load_versioned();
 
     if (!isset($state['players'][$player_id])) {
         // 404-подобная ситуация: раньше здесь бросался необработанный случай → HTTP 500
@@ -72,95 +72,105 @@ try {
         closeRedis();
         jsonError('Неизвестное действие: ' . $action, 400);
     }
+
+    $target_x = (int)($input['x'] ?? -1);
+    $target_y = (int)($input['y'] ?? -1);
+    $ability_name = $input['ability'] ?? null;
+
+    // ─── ПРИМЕНЕНИЕ ДЕЙСТВИЯ (цикл CAS / optimistic concurrency) ────────────
+    // ★ ИСПРАВЛЕНИЕ серверной половины бага «потери пакета» (last-writer-wins):
+    // poll.php тикает параллельно (отдельный PHP-процесс) и раньше мог
+    // безусловно перезаписать мир снапшотом, загруженным ДО нашего действия —
+    // игрок получал «Действие выполнено», а мир откатывал изменение назад.
+    // Теперь сохранение — compare-and-swap по версии, прочитанной при загрузке
+    // (world_save_cas). Если мир успел измениться — НЕ затираем чужую запись,
+    // а перечитываем свежее состояние, заново валидируем и применяем то же
+    // действие поверх него (rebase) и повторяем сохранение. Идемпотентность по
+    // action_id выше по-прежнему защищает от двойного применения ретраев.
     $verb = $action; // move|attack|ability — тот же словарь, что у effects_blocks
-    $v = action_validate($state, $player_id, $verb);
-    if (!$v['success']) {
-        closeRedis();
-        // Отклонение действия — это штатная ситуация, а не серверная ошибка: 400 + JSON
-        jsonError($v['message'], 400);
-    }
-
     $result = ['success' => false, 'message' => 'Неизвестное действие'];
+    $saved = false;
 
-    switch ($action) {
-        case 'move':
-            $target_x = (int)($input['x'] ?? -1);
-            $target_y = (int)($input['y'] ?? -1);
-            if (!isValidPosition($target_x, $target_y)) {
-                $result = ['success' => false, 'message' => 'Неверные координаты'];
+    for ($cas_attempt = 0; $cas_attempt < 3; $cas_attempt++) {
+        $v = action_validate($state, $player_id, $verb);
+        if (!$v['success']) {
+            closeRedis();
+            // Отклонение действия — это штатная ситуация, а не серверная ошибка: 400 + JSON
+            jsonError($v['message'], 400);
+        }
+
+        switch ($action) {
+            case 'move':
+                if (!isValidPosition($target_x, $target_y)) {
+                    $result = ['success' => false, 'message' => 'Неверные координаты'];
+                    break;
+                }
+                $result = movement_process_move($state, $player_id, $target_x, $target_y);
                 break;
-            }
-            $result = movement_process_move($state, $player_id, $target_x, $target_y);
-            break;
 
-        case 'attack':
-            $target_x = (int)($input['x'] ?? -1);
-            $target_y = (int)($input['y'] ?? -1);
-            if (!isValidPosition($target_x, $target_y)) {
-                $result = ['success' => false, 'message' => 'Неверные координаты'];
+            case 'attack':
+                if (!isValidPosition($target_x, $target_y)) {
+                    $result = ['success' => false, 'message' => 'Неверные координаты'];
+                    break;
+                }
+                $result = combat_process_attack($state, $player_id, $target_x, $target_y);
                 break;
-            }
-            $result = combat_process_attack($state, $player_id, $target_x, $target_y);
-            break;
 
-        case 'ability':
-            $ability_name = $input['ability'] ?? null;
-            $target_x = (int)($input['x'] ?? -1);
-            $target_y = (int)($input['y'] ?? -1);
+            case 'ability':
+                if (!$ability_name) {
+                    $result = ['success' => false, 'message' => 'Не указана способность'];
+                    break;
+                }
 
-            if (!$ability_name) {
-                $result = ['success' => false, 'message' => 'Не указана способность'];
+                // Способность должна быть у игрока (строка "NAME[range]")
+                $has_ability = false;
+                foreach ($state['players'][$player_id]['ABILITIES'] as $ab) {
+                    if (strpos($ab, $ability_name) === 0) { $has_ability = true; break; }
+                }
+                if (!$has_ability) {
+                    $result = ['success' => false, 'message' => 'Способность не доступна'];
+                    break;
+                }
+
+                if ($state['players'][$player_id]['ACTIONS'] <= 0) {
+                    $result = ['success' => false, 'message' => 'Нет очков действий'];
+                    break;
+                }
+                if ($state['players'][$player_id]['STATUS'] === 'MOVING') {
+                    $result = ['success' => false, 'message' => 'Нельзя использовать способность во время движения'];
+                    break;
+                }
+                // CC-блокировка способности — спрашиваем effects (не парсим NEGATIVES)
+                $block = effects_blocks($state['players'][$player_id], 'ability');
+                if ($block['blocked']) {
+                    $result = ['success' => false, 'message' => 'Игрок оглушен'];
+                    break;
+                }
+                if ($state['players'][$player_id]['STATUS'] === 'STUNNED') {
+                    $result = ['success' => false, 'message' => 'Игрок оглушен'];
+                    break;
+                }
+
+                $ability_result = applyAbility($state, $player_id, $ability_name, $target_x, $target_y);
+
+                if ($ability_result['success']) {
+                    $state['players'][$player_id]['ACTIONS']--;
+                    $state['players'][$player_id]['STATUS'] = 'ABILITY';
+                    $state['players'][$player_id]['ATTACK_TIME'] = time();
+                    // TURN — каноническая формула из engine/rules (только лево/право)
+                    $ab_pos = parseXY($state['players'][$player_id]['CUR_POSITION_XY']);
+                    $new_turn = rules_turn_formula($ab_pos['x'], $target_x, $state['players'][$player_id]['TURN']);
+                    if ($new_turn !== null) $state['players'][$player_id]['TURN'] = $new_turn;
+                }
+                $result = $ability_result;
                 break;
-            }
 
-            // Способность должна быть у игрока (строка "NAME[range]")
-            $has_ability = false;
-            foreach ($state['players'][$player_id]['ABILITIES'] as $ab) {
-                if (strpos($ab, $ability_name) === 0) { $has_ability = true; break; }
-            }
-            if (!$has_ability) {
-                $result = ['success' => false, 'message' => 'Способность не доступна'];
-                break;
-            }
+            default:
+                $result = ['success' => false, 'message' => 'Неизвестное действие: ' . $action];
+        }
 
-            if ($state['players'][$player_id]['ACTIONS'] <= 0) {
-                $result = ['success' => false, 'message' => 'Нет очков действий'];
-                break;
-            }
-            if ($state['players'][$player_id]['STATUS'] === 'MOVING') {
-                $result = ['success' => false, 'message' => 'Нельзя использовать способность во время движения'];
-                break;
-            }
-            // CC-блокировка способности — спрашиваем effects (не парсим NEGATIVES)
-            $block = effects_blocks($state['players'][$player_id], 'ability');
-            if ($block['blocked']) {
-                $result = ['success' => false, 'message' => 'Игрок оглушен'];
-                break;
-            }
-            if ($state['players'][$player_id]['STATUS'] === 'STUNNED') {
-                $result = ['success' => false, 'message' => 'Игрок оглушен'];
-                break;
-            }
+        if (!$result['success']) break; // штатный отказ правил — сохраняем не нужно
 
-            $ability_result = applyAbility($state, $player_id, $ability_name, $target_x, $target_y);
-
-            if ($ability_result['success']) {
-                $state['players'][$player_id]['ACTIONS']--;
-                $state['players'][$player_id]['STATUS'] = 'ABILITY';
-                $state['players'][$player_id]['ATTACK_TIME'] = time();
-                // TURN — каноническая формула из engine/rules (только лево/право)
-                $ab_pos = parseXY($state['players'][$player_id]['CUR_POSITION_XY']);
-                $new_turn = rules_turn_formula($ab_pos['x'], $target_x, $state['players'][$player_id]['TURN']);
-                if ($new_turn !== null) $state['players'][$player_id]['TURN'] = $new_turn;
-            }
-            $result = $ability_result;
-            break;
-
-        default:
-            $result = ['success' => false, 'message' => 'Неизвестное действие: ' . $action];
-    }
-
-    if ($result['success']) {
         $state = world_log($state, $result['message']);
 
         // Финализация начала движения: фиксируем виртуальные часы мира, чтобы
@@ -171,26 +181,27 @@ try {
             movement_finalize_start($state, $player_id);
         }
 
-        // Retry-логика сохранения (3 попытки), версия инкрементит world_save.
-        // ★ Критично для «потери пакета»: world_save обязан реально записать
+        // ★ Критично для «потери пакета»: save обязан реально записать
         // состояние — если Redis-соединение почему-то закрыто, getRedis()
-        // восстановит его (ленивое переподключение), а pipeline-ошибки ловятся
-        // здесь же; при полном отказе возвращаем 5xx, чтобы клиент ретраировал.
-        $saveSuccess = false;
-        $saveAttempts = 0;
-        while (!$saveSuccess && $saveAttempts < 3) {
-            try {
-                world_save($state);
-                $saveSuccess = true;
-            } catch (Exception $e) {
-                $saveAttempts++;
-                if ($saveAttempts >= 3) {
-                    closeRedis();
-                    jsonError('Не удалось сохранить состояние после 3 попыток: ' . $e->getMessage());
-                }
-                usleep(100000);
-            }
+        // восстановит его (ленивое переподключение); ошибки соединения ловятся
+        // внешним catch (возврат 5xx → клиент ретраит идемпотентно).
+        try {
+            [$saved, $fresh_state] = world_save_cas($state, $base_version);
+        } catch (Exception $e) {
+            closeRedis();
+            jsonError('Не удалось сохранить состояние: ' . $e->getMessage());
         }
+
+        if ($saved) break;
+
+        // ГОНКА: параллельный процесс изменил мир между load и save.
+        // Продолжаем работу на свежезагруженном состоянии и повторяем
+        // валидацию+мутацию+сохранение поверх него.
+        $state = $fresh_state;
+        $base_version = (int)($state['version'] ?? 0);
+    }
+
+    if ($result['success'] && $saved) {
 
         // Версию читаем ДО закрытия соединения — раньше getRedis() после
         // closeRedis() возвращал null → фатал, успешное действие «терялось»
@@ -214,9 +225,14 @@ try {
             'version' => $new_version,
         ], JSON_UNESCAPED_UNICODE);
         exit;
+    } else if ($result['success'] && !$saved) {
+        // Успешно смоделировано, но 3 подряд гонки CAS — мир слишком горяч.
+        // 5xx: клиент ретраит с тем же action_id, состояние не испорчено.
+        closeRedis();
+        jsonError('Мир изменён параллельным процессом, повторите действие', 503);
     } else {
         closeRedis();
-        jsonError($result['message']);
+        jsonError($result['message'], 400);
     }
 
 } catch (Exception $e) {
