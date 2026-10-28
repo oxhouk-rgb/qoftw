@@ -163,27 +163,130 @@ if (!function_exists('getBattleState')) {
     }
 }
 
-// Сохранить состояние боя
+// ★ ЕДИНЫЙ СЧЁТЧИК ВЕРСИИ: REDIS_VERSION — единственный источник истины о
+// версии мира. Его читают world_load()/getBattleState() (ожидаемая версия в
+// action.php), его инкрементируют ОБА пути записи (legacy-тик poll.php/init и
+// CAS-action), по нему работает long-poll. Второй счётчик («state_version»)
+// был причиной регрессии «503 после первого действия»: legacy-путь никогда его
+// не обновлял, и каждая следующая CAS-запись ложно считалась гонкой.
+// REDIS_STATE_VERSION сохранён только как алиас (никогда не инкрементируется
+// отдельно) — на случай внешних отладочных скриптов, читающих константу.
+if (!defined('REDIS_STATE_VERSION')) define('REDIS_STATE_VERSION', REDIS_VERSION);
+
+// Сохранить состояние боя (опционально — с CAS-проверкой конкурентной записи).
+//
+// ★ ИСПРАВЛЕНИЕ «потери пакета» на сервере (last-writer-wins): раньше здесь
+// был безусловно-перезаписывающий pipeline: action.php загружал state, мутировал
+// его и сохранял, а ПАРАЛЛЕЛЬНЫЙ процесс poll.php в это же время делал свой тик
+// (движение, эффекты, ход) из snapshot, загруженного ДО применения действия.
+// Кто сохранится позже — тот затрёт чужую мутацию целиком: действие игрока
+// «применялось» (ack уже отправлен, клиент показал «Действие выполнено»), но
+// через мгновение перезаписанный снапшот опроса стирал его из мира. Пришлём
+// $expectedVersion (версию, прочитанную сразу ПОСЛЕ world_load в action.php) —
+// и запись станет атомарной: WATCH/MULTI/EXEC отклонит save, если мир изменился
+// параллельным процессом, а вызывающий код перечитает состояние и повторит
+// попытку (см. engine/world.php::world_save_cas).
+//
+// @param int|null $expectedVersion null — legacy-режим (init/tick без CAS).
+// @return bool true — записано; false — гонка (мир изменён, нужен rebase).
 if (!function_exists('saveBattleState')) {
-    function saveBattleState($state) {
+    function saveBattleState($state, $expectedVersion = null) {
+        $encode = function ($state) {
+            return [
+                json_encode($state['players']),
+                json_encode($state['objects']),
+                json_encode($state['traps']),
+                json_encode($state['npcs']),
+                json_encode($state['room']),
+                $state['turn_time'],
+                json_encode($state['projectiles']),
+                json_encode($state['log']),
+                // Комнаты: пишем только реально используемые (см. getBattleState выше).
+                json_encode(array_keys($state['rooms'] ?? [])),
+                $state['rooms'] ?? [],
+            ];
+        };
+
         $redis = getRedis();
-        $pipe = $redis->multi(Redis::PIPELINE);
-        $pipe->set(REDIS_PLAYERS, json_encode($state['players']));
-        $pipe->set(REDIS_OBJECTS, json_encode($state['objects']));
-        $pipe->set(REDIS_TRAPS, json_encode($state['traps']));
-        $pipe->set(REDIS_NPCS, json_encode($state['npcs']));
-        $pipe->set(REDIS_ROOM, json_encode($state['room']));
-        $pipe->set(REDIS_TURN_TIME, $state['turn_time']);
-        $pipe->set(REDIS_PROJECTILES, json_encode($state['projectiles']));
-        $pipe->incr(REDIS_VERSION);
-        $pipe->set(REDIS_LOG, json_encode($state['log']));
-        // Комнаты: пишем только реально используемые (см. getBattleState выше).
-        $rooms = $state['rooms'] ?? [];
-        $pipe->set(REDIS_ROOM_KEY_PREFIX . 'list', json_encode(array_keys($rooms)));
-        foreach ($rooms as $rid => $rdata) {
-            $pipe->set(REDIS_ROOM_KEY_PREFIX . $rid, json_encode($rdata));
+
+        if ($expectedVersion === null) {
+            // Legacy-путь без конкуренции (init, одиночный tick): как раньше.
+            $enc = $encode($state);
+            $pipe = $redis->multi(Redis::PIPELINE);
+            $pipe->set(REDIS_PLAYERS, $enc[0]);
+            $pipe->set(REDIS_OBJECTS, $enc[1]);
+            $pipe->set(REDIS_TRAPS, $enc[2]);
+            $pipe->set(REDIS_NPCS, $enc[3]);
+            $pipe->set(REDIS_ROOM, $enc[4]);
+            $pipe->set(REDIS_TURN_TIME, $enc[5]);
+            $pipe->set(REDIS_PROJECTILES, $enc[6]);
+            $pipe->incr(REDIS_VERSION);
+            $pipe->set(REDIS_LOG, $enc[7]);
+            $pipe->set(REDIS_ROOM_KEY_PREFIX . 'list', $enc[8]);
+            foreach ($enc[9] as $rid => $rdata) {
+                $pipe->set(REDIS_ROOM_KEY_PREFIX . $rid, json_encode($rdata));
+            }
+            $pipe->exec();
+            return true;
         }
-        $pipe->exec();
+
+        // CAS (compare-and-swap) через транзакцию WATCH/MULTI/EXEC:
+        // EXEC атомарно отменится (вернёт false), если параллельный процесс
+        // успел изменить мир между нашим WATCH и EXEC. Мониторим ВСЕ секции
+        // состояния, а не только счётчик версии: тик poll.php пишет секции в
+        // pipeline-транзакции, которая может пересечься с нашим окном read→save;
+        // именно watch по данным ловит реальную гонку read-modify-write даже
+        // когда номер версии уже совпадает (exec() отменится сам).
+        // После неудачного exec() повторять бесполезно — состояние уже
+        // рассинхронизировано; вызывающий код обязан перечитать мир (rebase)
+        // и вызвать save заново (см. world_save_cas в engine/world.php).
+        $watch_keys = [
+            REDIS_PLAYERS, REDIS_OBJECTS, REDIS_TRAPS, REDIS_NPCS, REDIS_ROOM,
+            REDIS_TURN_TIME, REDIS_PROJECTILES, REDIS_LOG, REDIS_VERSION,
+            REDIS_ROOM_KEY_PREFIX . 'list',
+        ];
+        $rooms = $state['rooms'] ?? [];
+        foreach (array_keys($rooms) as $rid) {
+            $watch_keys[] = REDIS_ROOM_KEY_PREFIX . $rid;
+        }
+
+        $redis->watch($watch_keys);
+
+        // Сверка ожидаемой версии с ЕДИНСТВЕННЫМ счётчиком REDIS_VERSION —
+        // тем же, который getBattleState() кладёт в state['version'] при load
+        // (и action.php, и rebase-цикл сверяются именно с ним). Раньше здесь
+        // сверялся второй, независимый счётчик (REDIS_STATE_VERSION), который
+        // legacy-путь (init/tick poll.php) никогда не инкрементировал: после
+        // первого же тика worlds он «отставал» от version, и каждая следующая
+        // CAS-запись ложно считалась гонкой → стабильный 503 («игра ломается
+        // после первого действия»).
+        $rv_raw = $redis->get(REDIS_VERSION);
+        $rv = ($rv_raw === false || $rv_raw === null) ? 0 : (int)$rv_raw;
+        if ($rv !== (int)$expectedVersion) {
+            $redis->unwatch();
+            return false; // мир изменился после нашего load — гонка, нужен rebase
+        }
+
+        $enc = $encode($state);
+        $tx = $redis->multi(); // Redis::MODE_ATOMIC (WATCH-транзакция)
+        $tx->set(REDIS_PLAYERS, $enc[0]);
+        $tx->set(REDIS_OBJECTS, $enc[1]);
+        $tx->set(REDIS_TRAPS, $enc[2]);
+        $tx->set(REDIS_NPCS, $enc[3]);
+        $tx->set(REDIS_ROOM, $enc[4]);
+        $tx->set(REDIS_TURN_TIME, $enc[5]);
+        $tx->set(REDIS_PROJECTILES, $enc[6]);
+        // Единый monotonic-счётчик: рост версии неразрывен с записью данных
+        // (в той же транзакции) — long-poll гарантированно увидит изменение.
+        $tx->incr(REDIS_VERSION);
+        $tx->set(REDIS_LOG, $enc[7]);
+        $tx->set(REDIS_ROOM_KEY_PREFIX . 'list', $enc[8]);
+        foreach ($enc[9] as $rid => $rdata) {
+            $tx->set(REDIS_ROOM_KEY_PREFIX . $rid, json_encode($rdata));
+        }
+        // exec() === false — транзакция отменена из-за изменения watched-ключей
+        // параллельным процессом (настоящая гонка): мир НЕ тронут.
+        return $tx->exec() !== false;
     }
 }
 

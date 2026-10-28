@@ -78,6 +78,50 @@ function world_save($state) {
 }
 
 /**
+ * Версия состояния сразу ПОСЛЕ загрузки — то, что должен передать action-эндпоинт
+ * в world_save_cas() как ожидаемую («я мутировал мир версии N»).
+ */
+function world_load_versioned() {
+    $state = world_load();
+    return [$state, (int)($state['version'] ?? 0)];
+}
+
+/**
+ * Атомарное сохранение с контролем конкурентности (CAS / optimistic locking).
+ *
+ * ★ ИСПРАВЛЕНИЕ серверной половины бага «потери пакета» (last-writer-wins):
+ * poll.php тикает в СВОЁМ PHP-процессе параллельно action.php; раньше оба
+ * писали весь мир безусловно, и тик опроса мог перезаписать только что
+ * применённое действие старым снапшотом — клиент видел «Действие выполнено»,
+ * а в мире ничего не менялось. Здесь: saveBattleState($state, $expectedVersion)
+ * отказывает в записи, если мир изменился после загрузки; вызывающий код
+ * перечитывает состояние (rebase), ПОВТОРНО вызывает мутатор на свежем
+ * снапшоте и сохраняет заново (см. цикл применения действия в action.php).
+ *
+ * @param array $state            состояние (мутация уже выполнена снаружи)
+ * @param int   $expected_version версия, прочитанная при загрузке
+ * @return array [bool written, array fresh_state] — fresh_state актуален при
+ *               written=false (им именно нужно продолжить работу).
+ */
+function world_save_cas($state, $expected_version) {
+    $work = $state;
+    $vmn = $work['WORLD_MOVE_NOW'] ?? null;
+    unset($work['WORLD_MOVE_NOW']); // не входит в сериализуемые секции
+
+    if (saveBattleState($work, (int)$expected_version)) {
+        if ($vmn !== null) {
+            try { getRedis()->set(REDIS_WORLD_MOVE_NOW, (string)$vmn); } catch (Throwable $e) {}
+        }
+        return [true, $state];
+    }
+
+    // ГОНКА: параллельный процесс (тик опроса/чужое действие) изменил мир
+    // между нашим load и save. НЕ затираем его запись — отдаём свежезагруженное
+    // состояние, на котором вызывающий код повторит мутацию и сохранение.
+    return [false, world_load()];
+}
+
+/**
  * Инициализировать мир заново из данных комнаты/бойцов (используется init.php).
  */
 function world_init($state) {
