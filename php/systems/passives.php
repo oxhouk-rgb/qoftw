@@ -196,6 +196,11 @@ function passives_on_turn_start(&$state, $payload) {
  *   - щит/смерть/прерывание движения — внутри combat_apply_damage (раньше
  *     splash-версия сама писала щит/HP, но НЕ знала про DEATH-статус NPC —
  *     теперь единый код).
+ * ★ Комнатная изоляция (regression бага «splash задевает бойца из другой
+ * комнаты с совпадающими координатами»): сетки соседних комнат совпадают,
+ * поэтому цели собираются ТОЛЬКО из комнаты атакующего — all_entities()
+ * вызывается с room_filter = ROOM_ID атакующего (как в targeting-хелперах
+ * find_target_at_position / get_targets_on_line / get_targets_in_area).
  */
 function passives_on_attack_resolved(&$state, $payload) {
     $attacker_id = $payload['attacker_id'];
@@ -204,6 +209,9 @@ function passives_on_attack_resolved(&$state, $payload) {
 
     $base_damage = $attacker['ATTACK'];
     $caster_ally = $attacker['ALLY'] ?? 'NONE';
+    // Комната атакующего: '' / null — legacy-режим единой карты (фильтр выключен)
+    $attacker_room = $attacker['ROOM_ID'] ?? null;
+    if ($attacker_room === '') $attacker_room = null;
 
     $hit = [];
     foreach ($payload['hit_cells'] as $cell) {
@@ -214,7 +222,7 @@ function passives_on_attack_resolved(&$state, $payload) {
     }
 
     $victims = [];
-    foreach (all_entities($state) as $e) {
+    foreach (all_entities($state, $attacker_room) as $e) {
         if (!hostile_to($e, $attacker_id, $caster_ally)) continue;
 
         // Для движущегося игрока — конечная клетка (как делал старый splash)
