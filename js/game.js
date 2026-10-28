@@ -354,6 +354,44 @@ function inCurrentRoom(e) {
     return e.ROOM_ID === room;
 }
 
+/**
+ * ★ КОМНАТНАЯ ИЗОЛЯЦИЯ ОТРИСОВКИ (корень бага «турель/мина видны во всех
+ * комнатах»): poll-ответ содержит objects/traps/npcs только текущей комнаты,
+ * поэтому div'ы сущностей чужих комнат раньше НИКОГДА не удалялись — после
+ * перехода по помещениям они оставались в DOM поверх новой карты по тем же
+ * координатам (клетки разных комнат пересекаются), визуально «дублируя»
+ * турели, мины и бочки в каждой комнате. Теперь при КАЖДОМ рендере проходятся
+ * все div'ы сущностей внутри сетки: всё, что относится к другой комнате
+ * (data-room-id ≠ рисуемой) или чему сервер больше не отдаёт элемент
+ * (перешло в другую комнату / уничтожено / скрыто), — удаляется с поля.
+ * Отрицательный whitelist обязателен: poll фильтрует списки по комнате, так
+ * что «исчезнувший» из ответа объект нельзя отличить от перешедшего в другую
+ * комнату без сравнения data-room-id div'а с рисуемой комнатой.
+ */
+function purgeOutOfViewRoomEntities(viewRoomId, keep) {
+    const container = document.getElementById('grid-container');
+    if (!container) return;
+    container.querySelectorAll('[data-player-id], [data-object-id], [data-trap-id], [data-npc-id]').forEach(el => {
+        if (keep.has(el)) return;
+        // Свой div игрока НЕ удаляем по room-id: poll всегда отдаёт его
+        // комнату, а на переходе между комнатами div обязан пережить этот
+        // шаг renderGrid, чтобы плавно долететь до двери (см. анимации).
+        // Но если рендер создал НОВЫЙ div бойца (старый осиротел после
+        // респауна/смены комнаты), старый обязан быть удалён — иначе два
+        // спрайта одного игрока.
+        if (el.dataset.playerId && el.dataset.playerId === String(state.playerId)) {
+            el.remove();
+            return;
+        }
+        const rid = el.dataset.roomId;
+        if (viewRoomId && rid && rid !== viewRoomId) {
+            el.remove(); // сущность чужой комнаты — визуальный дубль поверх этой карты
+            return;
+        }
+        if (!rid) el.remove(); // устаревший div без метки комнаты — гарантированный сброс
+    });
+}
+
 // === ОБРАБОТКА КЛИКОВ ===
 
 /**
@@ -1027,6 +1065,10 @@ function renderGrid(data) {
         }
     }
     
+    // ★ Набор div'ов, официально отрисованных этим poll-ответом (для
+    // purgeOutOfViewRoomEntities — всё остальное в сетке лишнее).
+    const keptEntities = new Set();
+
     // Отрисовка/обновление игроков
     if (data.players) {
         Object.keys(data.players).forEach(pid => {
@@ -1078,6 +1120,9 @@ function renderGrid(data) {
                 entity = createPlayerEntity(player, pid);
                 if (!entity) return;
                 entity.dataset.playerId = pid;
+                // ★ Метка комнаты для purgeOutOfViewRoomEntities(): при смене
+                // комнаты бойцы чужих комнат должны быть удалены с поля.
+                entity.dataset.roomId = player.ROOM_ID || '';
                 
                 // Определяем начальную позицию
                 const pos = parseXY(player.CUR_POSITION_XY);
@@ -1088,6 +1133,7 @@ function renderGrid(data) {
             } else {
                 // Обновляем существующий элемент
                 updatePlayerEntity(entity, player);
+                entity.dataset.roomId = player.ROOM_ID || '';
             }
             
             // ★ Мгновенные переходы (дверь между комнатами, респаун): сервер
@@ -1191,6 +1237,8 @@ function renderGrid(data) {
                 entity = createObjectEntity(obj);
                 entity.dataset.objectId = oid;
             }
+            entity.dataset.roomId = obj.ROOM_ID || '';
+            keptEntities.add(entity);
             const pos = parseXY(obj.POSITION_XY);
             const cell = document.getElementById('cell-' + pos.x + '-' + pos.y);
             if (cell && entity.parentElement !== cell) cell.appendChild(entity);
@@ -1223,6 +1271,8 @@ function renderGrid(data) {
                 entity = createTrapEntity(trap);
                 entity.dataset.trapId = tid;
             }
+            entity.dataset.roomId = trap.ROOM_ID || '';
+            keptEntities.add(entity);
             // ★ Позиция синхронизируется при КАЖДОМ рендере (не только при
             // создании): div мог остаться в клетке перестроенной сетки после
             // смены комнаты — без этого мина «прилипала» к старым координатам.
@@ -1262,6 +1312,8 @@ function renderGrid(data) {
                 entity = createNpcEntity(npc);
                 entity.dataset.npcId = nid;
             }
+            entity.dataset.roomId = npc.ROOM_ID || '';
+            keptEntities.add(entity);
             // ★ Позиция синхронизируется при КАЖДОМ рендере: после смены
             // комнаты div мог остаться в клетке перестроенной сетки.
             const npos = parseXY(npc.POSITION_XY);
@@ -1279,6 +1331,10 @@ function renderGrid(data) {
         });
     }
     
+    // ★ Гарантированная очистка: удалить из сетки все div'ы сущностей чужих
+    // комнат и «осиротевшие» элементы (см. purgeOutOfViewRoomEntities).
+    purgeOutOfViewRoomEntities(viewRoomId, keptEntities);
+
     // Подсветка зон вокруг игрока
     highlightPlayerZones(data);
 }
@@ -1479,6 +1535,15 @@ function renderProjectiles(data) {
     if (!data.projectiles) return;
     
     data.projectiles.forEach(proj => {
+        // ★ Комнатная изоляция: poll отдаёт снаряды ВСЕХ комнат, а координаты
+        // разных комнат пересекаются — без фильтра взрыв чужой комнаты
+        // отрисовывался бы поверх этой карты («призрачные» попадания в пустых
+        // комнатах). Комната снаряда = комната кастера из players.
+        if (state.currentRoomId) {
+            const caster = data.players && data.players[proj.caster];
+            const projRoom = caster ? caster.ROOM_ID : null;
+            if (projRoom !== state.currentRoomId) return;
+        }
         const cell = document.getElementById('cell-' + proj.to_x + '-' + proj.to_y);
         if (!cell) return;
         
