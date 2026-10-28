@@ -277,6 +277,11 @@ function renderGrid(data) {
                 if (sCell && entity.parentElement !== sCell) {
                     entity.style.transition = 'none';
                     sCell.appendChild(entity);
+                    // ★ Сброс кэша клетки гистерезиса (см. ниже в ветке «не
+                    // двигается»: после мгновенного перехода dataset.animCx/animCy
+                    // устаревает и следующий путь начался бы с рывка-допрыгивания)
+                    delete entity.dataset.animCx;
+                    delete entity.dataset.animCy;
                 }
             }
 
@@ -331,6 +336,14 @@ function renderGrid(data) {
                     if (cell && entity.parentElement !== cell) {
                         entity.style.transition = 'none';
                         cell.appendChild(entity);
+                        // ★ Сбрасываем кэш клетки гистерезиса интерполяции: он
+                        // хранит клетку, в которой спрайт стоял при последней
+                        // rAF-анимации. После мгновенной перестановки div'а
+                        // (дверь/респаун/purge — сетка перестроена) следующий
+                        // animateMove иначе вычислял offset от СТАРОЙ клетки и
+                        // спрайт «допрыгивал» её рывком в начале нового пути.
+                        delete entity.dataset.animCx;
+                        delete entity.dataset.animCy;
                     }
                 } else if (serverTimeSec() >= pendingAnim.serverEndTime) {
                     // ★ Анимация «дожила» до серверного финала ещё до следующего

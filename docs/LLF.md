@@ -64,16 +64,16 @@
 | `render` | :7 | Отрисовка состояния |
 | `highlightPlayerZones` | :22 | Подсветка зон вокруг игрока |
 | `renderGrid` | :84 | Отрисовка сетки с сущностями |
-| `createPlayerEntity` | :483 | Создать элемент игрока |
-| `createObjectEntity` | :542 | Создать элемент объекта |
-| `createTrapEntity` | :552 | Создать элемент ловушки |
-| `createNpcEntity` | :562 | Создать элемент NPC |
-| `renderPlayerInfo` | :582 | Отрисовка информации о текущем игроке |
-| `renderLog` | :611 | Отрисовка лога |
-| `renderAbilities` | :632 | Отрисовка списка способностей |
-| `renderProjectiles` | :672 | Отрисовка снарядов |
-| `renderTimer` | :709 | Отрисовка таймера хода |
-| `checkVictory` | :719 | Проверка победы |
+| `createPlayerEntity` | :496 | Создать элемент игрока |
+| `createObjectEntity` | :555 | Создать элемент объекта |
+| `createTrapEntity` | :565 | Создать элемент ловушки |
+| `createNpcEntity` | :575 | Создать элемент NPC |
+| `renderPlayerInfo` | :595 | Отрисовка информации о текущем игроке |
+| `renderLog` | :624 | Отрисовка лога |
+| `renderAbilities` | :645 | Отрисовка списка способностей |
+| `renderProjectiles` | :685 | Отрисовка снарядов |
+| `renderTimer` | :722 | Отрисовка таймера хода |
+| `checkVictory` | :732 | Проверка победы |
 
 ### `js/state.js` (2 фукн.)
 

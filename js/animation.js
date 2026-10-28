@@ -246,7 +246,11 @@ function catchUpMoveEnd(pid, anim) {
         entity.style.transition = 'none';
         entity.style.transform = '';
         const cell = document.getElementById(`cell-${endPos.x}-${endPos.y}`);
-        if (cell && entity.parentElement !== cell) cell.appendChild(entity);
+        if (cell && entity.parentElement !== cell) {
+            cell.appendChild(entity);
+            delete entity.dataset.animCx; // кэш клетки гистерезиса устарел
+            delete entity.dataset.animCy;
+        }
         applyTurnClass(entity, player.TURN);
         return;
     }
