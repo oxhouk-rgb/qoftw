@@ -26,6 +26,12 @@ if (!defined('REDIS_OBJECTS')) define('REDIS_OBJECTS', REDIS_PREFIX . 'objects')
 if (!defined('REDIS_TRAPS')) define('REDIS_TRAPS', REDIS_PREFIX . 'traps');
 if (!defined('REDIS_NPCS')) define('REDIS_NPCS', REDIS_PREFIX . 'npcs');
 if (!defined('REDIS_ROOM')) define('REDIS_ROOM', REDIS_PREFIX . 'room');
+// Флаг «мир собран из ИЗНАЧАЛЬНЫХ данных и записан в Redis» (пишет
+// engine/world_reset.php — его вызывают tools/reset_world.php и init.php?reset=1,
+// проверяет init.php). Хранится ОТДЕЛЬНО от battle:version, чтобы проверка
+// готовности инициализации не сдвигала версию мира и не будила ложно long-poll
+// клиентов.
+if (!defined('REDIS_SEEDED')) define('REDIS_SEEDED', REDIS_PREFIX . 'seeded');
 // Мультикомнатный мир: комнаты грузятся лениво из data/<ID>.json (см.
 // systems/rooms.php), поэтому в Redis физически лежат только реально
 // использованные комнаты — по ключу room:<ID>. REDIS_ROOM сохранён для

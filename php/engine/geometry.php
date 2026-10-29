@@ -9,39 +9,61 @@
 
 require_once __DIR__ . '/rules.php';
 
+// ★ ЗАЩИТА ПОРЯДКА ЗАГРУЗКИ (regression: tools/reset_world.php падал на фатале
+// "Cannot redeclare parseXY"). config.php исторически содержит условные дубли
+// parseXY/formatXY/isValidPosition «для standalone-использования» и объявляет их
+// через if (!function_exists(...)). Этот файл — единый владелец геометрии, но
+// PHP решает конфликт по ФАКТИЧЕСКОМУ порядку require: если config.php загрузить
+// раньше (battle.php делает именно так), его условные объявления станут
+// каноническими, а безусловные здесь — фатальным редекларированием. Сами функции
+// в обоих местах идентичны, поэтому ниже все объявления этого файла тоже
+// обёрнуты в function_exists(): кто бы ни загрузился первым, мир получает одну и
+// ту же геометрию, а повторная загрузка безопасна.
+
 /** Парсинг координат "X,Y" в массив ['x'=>int,'y'=>int] */
+if (!function_exists('parseXY')) {
 function parseXY($xy) {
     $parts = explode(',', $xy);
     return ['x' => (int)$parts[0], 'y' => (int)$parts[1]];
 }
+}
 
 /** Форматирование координат в строку (целые — как целые, иначе 2 знака) */
+if (!function_exists('formatXY')) {
 function formatXY($x, $y) {
     if (floor($x) == $x && floor($y) == $y) {
         return ((int)$x) . ',' . ((int)$y);
     }
     return round($x, 2) . ',' . round($y, 2);
 }
+}
 
 /** Валидность клетки сетки */
+if (!function_exists('isValidPosition')) {
 function isValidPosition($x, $y) {
     return $x >= 0 && $x < GRID_WIDTH && $y >= 0 && $y < GRID_HEIGHT;
 }
+}
 
 /** Манхэттенское расстояние между клетками */
+if (!function_exists('manhattan')) {
 function manhattan($x1, $y1, $x2, $y2) {
     return abs($x1 - $x2) + abs($y1 - $y2);
 }
+}
 
 /** Клетка в радиусе (манхэттен) */
+if (!function_exists('inRadius')) {
 function inRadius($cx, $cy, $x, $y, $radius) {
     return manhattan($cx, $cy, $x, $y) <= $radius;
+}
 }
 
 /**
  * Путь по прямой от A до B (без начальной клетки, с конечной).
  * Возвращает [] если точки совпадают или путь не по прямой/диагонали шагов.
  */
+if (!function_exists('calculatePath')) {
 function calculatePath($x1, $y1, $x2, $y2) {
     $path = [];
     $dx = ($x2 > $x1) ? 1 : (($x2 < $x1) ? -1 : 0);
@@ -62,8 +84,10 @@ function calculatePath($x1, $y1, $x2, $y2) {
 
     return $path;
 }
+}
 
 /** 8 соседних клеток (включая диагонали), только валидные */
+if (!function_exists('adjacentCells')) {
 function adjacentCells($x, $y) {
     $cells = [];
     for ($dx = -1; $dx <= 1; $dx++) {
@@ -78,11 +102,13 @@ function adjacentCells($x, $y) {
     }
     return $cells;
 }
+}
 
 /**
  * Клетки в манхэттен-радиусе от центра (включая центр), только валидные.
  * Используется AoE-зонами и зонами угрозы.
  */
+if (!function_exists('cellsInRadius')) {
 function cellsInRadius($center_x, $center_y, $radius) {
     $cells = [];
     for ($dx = -$radius; $dx <= $radius; $dx++) {
@@ -97,11 +123,14 @@ function cellsInRadius($center_x, $center_y, $radius) {
     }
     return $cells;
 }
+}
 
 /** Направление-шаг (dx,dy) из разницы точек */
+if (!function_exists('directionStep')) {
 function directionStep($x1, $y1, $x2, $y2) {
     return [
         ($x2 > $x1) ? 1 : (($x2 < $x1) ? -1 : 0),
         ($y2 > $y1) ? 1 : (($y2 < $y1) ? -1 : 0),
     ];
+}
 }

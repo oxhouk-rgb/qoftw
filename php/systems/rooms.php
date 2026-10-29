@@ -30,15 +30,57 @@ require_once __DIR__ . '/../engine/world.php';
 require_once __DIR__ . '/targeting.php';
 
 /**
- * Карта комнаты из состояния (ленивая загрузка из data/<ID>.json).
- * Возвращает null если комната неизвестна/файл битый — вызывающие обязаны
- * tolerate null (не ронять мир из-за отсутствующего файла).
+ * Карта комнаты.
+ *
+ * ★ ДВА РАЗНЫХ ИСТОЧНИКА — и это не случайность, а следствие разделения
+ *   «изначальное состояние» / «живой бой»:
+ *     1) СТАТИЧЕСКИЙ КОНТЕНТ (карты комнат: grid/exits/spawn_cells/расстановка
+ *        objects-traps-npcs) — единственный источник истины data/<ID>.json на
+ *        диске. Он читается ПЕРВЫМ всегда.
+ *        Причина (regression): Redis хранит копию карты как часть состояния
+ *        боя, поэтому после правки файла комнаты «в мир уже загружена старая
+ *        версия» — reset-скрипт собирал бы из battle:room:<ID> пустую
+ *        расстановку и молча терял объекты/мины/NPC. Правка JSON-карты теперь
+ *        действует сразу, без пересохранения мира.
+ *     2) РАНТАЙМ-СЛОЙ — state['rooms'] (комната уже оседла в текущем запросе)
+ *        и боевая копия battle:room:<ID> (её обновляют teleport/world_save).
+ *        Они используются, когда диск недоступен или когда рантайм легитимно
+ *        изменил комнату (например, добавил в state карту новой комнаты).
+ *   Комнаты грузятся лениво; в Redis физически лежат только реально используемые
+ *   комнаты. Добавление новой комнаты = новый JSON-файл + запись в exits
+ *   соседних, без правок кода.
+ *
+ * Возвращает null если комната неизвестна/карта битая — вызывающие обязаны
+ * tolerate null (не ронять мир из-за отсутствующей комнаты).
  */
 function room_get($state, $room_id) {
     if ($room_id === null || $room_id === '') return null;
+    // 1) СТАТИКА: карта комнаты с диска — canonical source контента.
+    $disk = room_read_static_card($room_id);
+    if ($disk !== null) return $disk;
+    // 2) Уже загруженная в этом состоянии копия (ленивый кэш текущего запроса).
     if (isset($state['rooms'][$room_id])) return $state['rooms'][$room_id];
+    // 3) Боевая копия из Redis (fallback, если файл недоступен).
+    try {
+        $raw = getRedis()->get(REDIS_ROOM_KEY_PREFIX . $room_id);
+        if ($raw !== false && $raw !== null && $raw !== '') {
+            $data = json_decode($raw, true);
+            if (is_array($data) && isset($data['grid'])) return $data;
+        }
+    } catch (Throwable $e) {
+        // Хранилище недоступно — считаем комнату неизвестной вместо фатала.
+    }
+    return null;
+}
+
+/**
+ * Прочитать СТАТИЧЕСКУЮ карту комнаты с диска (data/<ID>.json). Только чтение,
+ * без кэша: вызывается при первом обращении к комнате (лениво), а не каждый тик.
+ * @return array|null null — файла нет/он битый (не валидная карта с grid).
+ */
+function room_read_static_card($room_id) {
     $path = __DIR__ . '/../../data/' . basename((string)$room_id) . '.json';
-    if (!file_exists($path)) return null;
+    if (!is_file($path)) return null;
     $content = @file_get_contents($path);
     if ($content === false) return null;
     $data = json_decode($content, true);
@@ -161,6 +203,53 @@ function room_defined_spawn_cell($room, $player_id) {
     $xy = $cells[$player_id] ?? null;
     if (!is_string($xy) || $xy === '') return null;
     return $xy;
+}
+
+/**
+ * ★ Стартовая клетка бойца при ПЕРВОМ появлении в бою (сборка мира).
+ * Единственный владелец этого правила: её же использует движок для респауна
+ * (room_player_spawn_cell), поэтому «точка старта» и «точка возвращения после
+ * смерти» физически не могут разойтись.
+ *   1) выделенная клетка из spawn_cells карты комнаты (если задана для игрока);
+ *   2) иначе — позиция из снимка бойцов (CUR_POSITION_XY / POSITION_XY);
+ *   3.5) иначе — ближайшая свободная клетка вокруг точки появления;
+ *   4) страховка — центр комнаты.
+ * Возвращает "x,y" или null (комната неизвестна).
+ */
+function room_initial_spawn_cell($state, $room_id, $player_id, $fallback_xy = '') {
+    if ($room_id === null || $room_id === '' || $player_id === null || $player_id === '') return null;
+    $room = room_get($state, $room_id);
+    if ($room === null) return null;
+
+    $is_exit = function ($xy) use ($room) {
+        return isset($room['exits'][$xy]) || isset($room['exit_rooms'][$xy]);
+    };
+    $forbidden = [];
+    foreach (array_merge(array_keys($room['exits'] ?? []),
+                         array_keys($room['exit_rooms'] ?? [])) as $xy) {
+        $forbidden[$xy] = true;
+    }
+
+    // Точка-предпочтение: спавн-клетка карты, иначе позиция из снимка.
+    $preferred = room_defined_spawn_cell($room, $player_id);
+    if (($preferred === null || $preferred === '') && is_string($fallback_xy) && $fallback_xy !== '') {
+        $preferred = $fallback_xy;
+    }
+
+    if ($preferred !== null && $preferred !== '' && !$is_exit($preferred)) {
+        $p = parseXY($preferred);
+        if (isValidPosition($p['x'], $p['y']) &&
+            !room_cell_blocked($state, $room, $p['x'], $p['y'], $room_id) &&
+            !is_player_at_position($state, $p['x'], $p['y'], $player_id, $room_id, true)) {
+            return $preferred; // точка свободна — встаём ровно на неё
+        }
+        $near = room_find_spawn_cell($state, $room, $p['x'], $p['y'], $player_id, $room_id, $forbidden, $is_exit);
+        if ($near !== null) return $near;
+    }
+
+    $cx = (int)floor(($room['width'] ?? GRID_WIDTH) / 2);
+    $cy = (int)floor(($room['height'] ?? GRID_HEIGHT) / 2);
+    return room_find_spawn_cell($state, $room, $cx, $cy, $player_id, $room_id, $forbidden, $is_exit);
 }
 
 /**
