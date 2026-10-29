@@ -8,16 +8,21 @@
 
 ## Клиент (js/animation.js, js/config.js, js/grid.js, js/input.js, js/main.js, js/net.js, js/path.js, js/render.js, js/state.js, js/utils.js)
 
-### `js/animation.js` (6 фукн.)
+### `js/animation.js` (11 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `previewTurn` | :13 | Мгновенный «превью» поворота собственного игрока при клике Attack/Ability. |
 | `applyTurnClass` | :30 | Применить отражение спрайта по направлению TURN. |
 | `updatePlayerEntity` | :38 | Обновить существующий элемент игрока |
-| `startMoveAnimation` | :101 | ★ Запустить анимацию перемещения для игрока (интерполяция по СЕРВЕРНЫМ часам). |
-| `animateMove` | :130 | Анимация перемещения (вызывается каждый кадр). |
-| `catchUpMoveEnd` | :234 | ★ Мягкая дозапись позиции бойца, чья анимация была досрочно снята render-циклом |
+| `stopMoveLoop` | :123 | ★ Остановить rAF-цикл интерполяции, если он ещё не выполнился. |
+| `stopAllMoveAnimations` | :138 | ★ Снять ВСЕ локальные анимации движения (пакетно, одним проходом). |
+| `startMoveAnimation` | :168 | ★ Запустить анимацию перемещения для игрока (интерполяция по СЕРВЕРНЫМ часам). |
+| `animateMove` | :209 | Анимация перемещения (вызывается каждый кадр). |
+| `glideTransform` | :354 | ★ Финальная CSS-скользка transform (0.12 с linear) — общий механизм для |
+| `clearSettleState` | :386 | ★ Снять финальную скользку/маркер ожидания у спрайта (вызывается из любой |
+| `settleSpriteAtEnd` | :403 | ★ Зафиксировать спрайт на клетке endPos (общий финал catchUpMoveEnd и |
+| `catchUpMoveEnd` | :468 | ★ Мягкая дозапись позиции бойца, чья анимация была досрочно снята render-циклом |
 
 ### `js/grid.js` (5 фукн.)
 
@@ -47,7 +52,7 @@
 | `startPolling` | :111 | Запуск цикла long polling |
 | `poll` | :120 | Один запрос long polling |
 | `nextActionId` | :173 |  |
-| `sendAction` | :197 | Отправить действие на сервер с retry логикой. |
+| `sendAction` | :212 | Отправить действие на сервер с retry логикой. |
 
 ### `js/path.js` (3 фукн.)
 
@@ -64,23 +69,23 @@
 | `render` | :7 | Отрисовка состояния |
 | `highlightPlayerZones` | :22 | Подсветка зон вокруг игрока |
 | `renderGrid` | :84 | Отрисовка сетки с сущностями |
-| `createPlayerEntity` | :496 | Создать элемент игрока |
-| `createObjectEntity` | :555 | Создать элемент объекта |
-| `createTrapEntity` | :565 | Создать элемент ловушки |
-| `createNpcEntity` | :575 | Создать элемент NPC |
-| `renderPlayerInfo` | :595 | Отрисовка информации о текущем игроке |
-| `renderLog` | :624 | Отрисовка лога |
-| `renderAbilities` | :645 | Отрисовка списка способностей |
-| `renderProjectiles` | :685 | Отрисовка снарядов |
-| `renderTimer` | :722 | Отрисовка таймера хода |
-| `checkVictory` | :732 | Проверка победы |
+| `createPlayerEntity` | :552 | Создать элемент игрока |
+| `createObjectEntity` | :611 | Создать элемент объекта |
+| `createTrapEntity` | :621 | Создать элемент ловушки |
+| `createNpcEntity` | :631 | Создать элемент NPC |
+| `renderPlayerInfo` | :651 | Отрисовка информации о текущем игроке |
+| `renderLog` | :680 | Отрисовка лога |
+| `renderAbilities` | :701 | Отрисовка списка способностей |
+| `renderProjectiles` | :741 | Отрисовка снарядов |
+| `renderTimer` | :778 | Отрисовка таймера хода |
+| `checkVictory` | :788 | Проверка победы |
 
 ### `js/state.js` (2 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `serverTimeSec` | :36 | ★ Перевод локальных часов (performance.now, мс) в серверные (unix, сек) — |
-| `effectiveMoveRange` | :48 | ★ Пункт плана №4: эффективная дальность хода со всеми модификаторами. |
+| `serverTimeSec` | :43 | ★ Перевод локальных часов (performance.now, мс) в серверные (unix, сек) — |
+| `effectiveMoveRange` | :55 | ★ Пункт плана №4: эффективная дальность хода со всеми модификаторами. |
 
 ### `js/utils.js` (4 фукн.)
 
@@ -126,28 +131,28 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `redisConnect` | :52 |  |
-| `isRedisConnected` | :76 |  |
-| `getRedisHandle` | :82 |  |
-| `getRedis` | :95 |  |
-| `closeRedis` | :103 |  |
-| `getBattleState` | :118 |  |
-| `saveBattleState` | :168 |  |
-| `addLog` | :192 |  |
-| `parseXY` | :210 |  |
-| `formatXY` | :218 |  |
-| `isValidPosition` | :230 |  |
-| `setCorsHeaders` | :237 |  |
-| `jsonResponse` | :247 |  |
-| `jsonError` | :260 |  |
-| `clearOutputBuffers` | :270 |  |
-| `sendJsonErrorFallback` | :278 |  |
+| `redisConnect` | :58 |  |
+| `isRedisConnected` | :82 |  |
+| `getRedisHandle` | :88 |  |
+| `getRedis` | :101 |  |
+| `closeRedis` | :109 |  |
+| `getBattleState` | :124 |  |
+| `saveBattleState` | :199 |  |
+| `addLog` | :301 |  |
+| `parseXY` | :319 |  |
+| `formatXY` | :327 |  |
+| `isValidPosition` | :339 |  |
+| `setCorsHeaders` | :346 |  |
+| `jsonResponse` | :356 |  |
+| `jsonError` | :369 |  |
+| `clearOutputBuffers` | :379 |  |
+| `sendJsonErrorFallback` | :387 |  |
 
 ### `php/poll.php` (1 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `build_poll_response` | :116 | Сборка flat-ответа poll (контракт клиента js/game.js render(data)). |
+| `build_poll_response` | :122 | Сборка flat-ответа poll (контракт клиента js/net.js/render.js render(data)). |
 
 
 ## Ядро движка (php/engine/)
@@ -173,15 +178,15 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `parseXY` | :13 |  |
-| `formatXY` | :19 |  |
-| `isValidPosition` | :27 |  |
-| `manhattan` | :32 |  |
-| `inRadius` | :37 |  |
-| `calculatePath` | :45 | Путь по прямой от A до B (без начальной клетки, с конечной). |
-| `adjacentCells` | :67 |  |
-| `cellsInRadius` | :86 | Клетки в манхэттен-радиусе от центра (включая центр), только валидные. |
-| `directionStep` | :102 |  |
+| `parseXY` | :25 |  |
+| `formatXY` | :33 |  |
+| `isValidPosition` | :43 |  |
+| `manhattan` | :50 |  |
+| `inRadius` | :57 |  |
+| `calculatePath` | :67 |  |
+| `adjacentCells` | :91 |  |
+| `cellsInRadius` | :112 |  |
+| `directionStep` | :130 |  |
 
 ### `php/engine/rules.php` (2 фукн.)
 
@@ -204,17 +209,42 @@
 | `turn_reset_attack_status` | :287 |  |
 | `turn_register_hooks` | :302 |  |
 
-### `php/engine/world.php` (7 фукн.)
+### `php/engine/world.php` (9 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `world_load` | :36 | Загрузить состояние мира из Redis. |
 | `world_save` | :58 | Сохранить состояние мира в Redis + инкрементировать версию (единая точка!). |
-| `world_init` | :83 | Инициализировать мир заново из данных комнаты/бойцов (используется init.php). |
-| `world_log` | :99 | Добавить запись в журнал боя (журнал — читаемые события, не трассировка). |
-| `world_version` | :107 | Текущая версия мира (для long-poll цикла). Устойчив к закрытому соединению: |
-| `world_action_ack_get` | :140 | Проверить, применено ли действие с таким action_id ранее. |
-| `world_action_ack_set` | :157 | Записать подтверждение применённого действия (после успешного world_save). |
+| `world_load_versioned` | :84 | Версия состояния сразу ПОСЛЕ загрузки — то, что должен передать action-эндпоинт |
+| `world_save_cas` | :106 | Атомарное сохранение с контролем конкурентности (CAS / optimistic locking). |
+| `world_init` | :127 | Инициализировать мир заново из данных комнаты/бойцов (используется init.php). |
+| `world_log` | :143 | Добавить запись в журнал боя (журнал — читаемые события, не трассировка). |
+| `world_version` | :151 | Текущая версия мира (для long-poll цикла). Устойчив к закрытому соединению: |
+| `world_action_ack_get` | :184 | Проверить, применено ли действие с таким action_id ранее. |
+| `world_action_ack_set` | :201 | Записать подтверждение применённого действия (после успешного world_save). |
+
+### `php/engine/world_builder.php` (10 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `world_builder_player_defaults` | :50 | Дефолты бойца — то, что получает поле, НЕ указанное в снимке игроков |
+| `world_builder_known_rooms` | :66 | Известные комнаты из каталога data/*.json — статический контент (карты), а не |
+| `world_builder_index_players` | :82 | Список бойцов из seed-снимка → словарь по ID (NICKNAME/CHAR_ID как ключ). |
+| `world_builder_normalize_player` | :122 | Собрать бойца: дефолты ← нормализация координат ← overrides из снимка. |
+| `world_builder_player_errors` | :185 | Проверка собранного бойца на обязательные поля (fail-fast список ошибок). |
+| `world_build_initial` | :214 | ★ Полный сброс мира к ИЗНАЧАЛЬНОМУ состоянию. |
+| `player_defaults` | :333 | ★ Публичный алиас для HTTP-слоя (init.php): дефолты бойца. Держим одну точку |
+| `normalize_player` | :338 | ★ Публичный алиас: нормализация бойца (снимок/карточка клиента → поля state). |
+| `world_builder_read_snapshot` | :348 | Прочитать ИЗНАЧАЛЬНЫЙ снимок бойцов с диска. Единственная точка, где путь к |
+| `world_build_player_from_payload` | :366 | ★ Собрать ОДНОГО бойца из карточки, присланной клиентом (game.html сегодня |
+
+### `php/engine/world_reset.php` (3 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `world_reset_build` | :43 | Собрать изначальное состояние мира из статики (код + карты комнат + снимок). |
+| `world_reset_write` | :70 | Записать собранный мир в Redis как НОВУЮ сессию. |
+| `world_reset_session` | :127 | ★ Полный перезапуск сессии: сборка + проверка + запись. |
 
 
 ## Системы механик (php/systems/)
@@ -271,21 +301,27 @@
 | `movement_finalize_start` | :375 | ★ ФАЗА 2-инициализация: зафиксировать старт движения в состоянии. |
 | `movement_register_hooks` | :383 |  |
 
-### `php/systems/objects.php` (11 фукн.)
+### `php/systems/objects.php` (17 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `getAutonomousObjectDefinitions` | :24 |  |
-| `objects_has_line_of_sight` | :49 | Линия видимости для NPC: прямые (гориз/верт) и диагонали (Г-образная проверка). |
-| `calculateThreatZone` | :100 | Зона угрозы NPC: клетки в манхэттен-RANGE с линией видимости. |
-| `objects_check_threat_zone` | :133 | Проверить пересечение игрока с зонами угрозы всех NPC. |
-| `objects_refresh_threat_zones` | :216 | ★ Пересчёт зон угрозы всех живых NPC (вызывается из turn_tick после фазы |
-| `objects_update_npc_statuses` | :230 |  |
-| `objects_restore_npc_actions` | :247 |  |
-| `objects_on_turn_start` | :256 |  |
-| `processNPCs` | :269 | Обработка ИИ NPC — оставлена пустой для обратной совместимости |
-| `processTraps` | :283 | Срабатывание ловушки при входе игрока на её клетку. |
-| `objects_register_hooks` | :337 |  |
+| `getObjectTemplates` | :55 | ★ РЕЕСТР ШАБЛОНОВ ОБЪЕКТОВ / ЛОВУШЕК / NPC — единый источник их характеристик. |
+| `objectEntityDefaults` | :88 | Канонический набор полей сущности по умолчанию. Единственное место, где они |
+| `objects_section_of` | :104 |  |
+| `objects_build_entity` | :114 | Собрать ЭКЗЕМПЛЯР сущности: дефолты категории ← defaults шаблона ← override |
+| `objects_layout_from_room` | :142 | ★ Расстановка сущностей по карте комнаты — источник ИЗНАЧАЛЬНОГО состояния. |
+| `objects_spawn_entity` | :168 | ★ СПАВН экземпляра сущности в мире (сюда придут spawn-объекты способностей). |
+| `objects_has_line_of_sight` | :209 | Линия видимости для NPC: прямые (гориз/верт) и диагонали (Г-образная проверка). |
+| `calculateThreatZone` | :260 | Зона угрозы NPC: клетки в манхэттен-RANGE с линией видимости. |
+| `objects_check_threat_zone` | :293 | Проверить пересечение игрока с зонами угрозы всех NPC. |
+| `objects_refresh_threat_zones` | :376 | ★ Пересчёт зон угрозы всех живых NPC (вызывается из turn_tick после фазы |
+| `objects_update_npc_statuses` | :390 |  |
+| `objects_restore_npc_actions` | :407 |  |
+| `objects_on_turn_start` | :416 |  |
+| `processNPCs` | :429 | Обработка ИИ NPC — оставлена пустой для обратной совместимости |
+| `processTraps` | :443 | Срабатывание ловушки при входе игрока на её клетку. |
+| `objects_register_hooks` | :497 |  |
 
 ### `php/systems/passives.php` (12 фукн.)
 
@@ -301,23 +337,25 @@
 | `passives_on_query_distance` | :155 | Слушатель movement.query_distance (by-ref): SWIFT добавляет +value к |
 | `passives_effects_move_modifier` | :164 |  |
 | `passives_on_turn_start` | :176 | Слушатель REGENERATION на turn.start: +value HP (кэп MAX_HITPOINTS). |
-| `passives_on_attack_resolved` | :200 | ★ SPLASH — слушатель attack.resolved. Полностью переписан: вместо цикла |
-| `passives_register_hooks` | :249 |  |
+| `passives_on_attack_resolved` | :205 | ★ SPLASH — слушатель attack.resolved. Полностью переписан: вместо цикла |
+| `passives_register_hooks` | :257 |  |
 
-### `php/systems/rooms.php` (10 фукн.)
+### `php/systems/rooms.php` (12 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `room_get` | :37 | Карта комнаты из состояния (ленивая загрузка из data/<ID>.json). |
-| `room_of_player` | :53 | Комната, в которой находится игрок (или null для мёртвых/удалённых — |
-| `room_cell_blocked` | :67 | Одна проверка проходимости клетки в конкретной комнате: стена (grid==0), |
-| `room_candidate_cells` | :96 | Клетки-кандидаты для появления рядом с дверью, упорядоченные «от лучшей к |
-| `room_find_spawn_cell` | :134 | ★ Ближайшая СВОБОДНАЯ клетка появления рядом с дверью (защита от body-block: |
-| `room_defined_spawn_cell` | :157 | ★ Выделенная СПАВН-КЛЕТКА игрока в комнате — берётся НЕ из позиции смерти |
-| `room_player_spawn_cell` | :189 | ★ Личная СПАВН-КЛЕТКА бойца в его SPAWN_ROOM — конкретная ВЫДЕЛЕННАЯ клетка, |
-| `rooms_teleport` | :266 | ★ Перенос игрока в другую комнату (аналог срабатывания exit; используется и |
-| `rooms_check_exit_trigger` | :390 | ★ Триггер exit: вызывается когда игрок оказался на клетке с exit |
-| `rooms_register_hooks` | :403 |  |
+| `room_get` | :56 | Карта комнаты. |
+| `room_read_static_card` | :81 | Прочитать СТАТИЧЕСКУЮ карту комнаты с диска (data/<ID>.json). Только чтение, |
+| `room_of_player` | :95 | Комната, в которой находится игрок (или null для мёртвых/удалённых — |
+| `room_cell_blocked` | :109 | Одна проверка проходимости клетки в конкретной комнате: стена (grid==0), |
+| `room_candidate_cells` | :138 | Клетки-кандидаты для появления рядом с дверью, упорядоченные «от лучшей к |
+| `room_find_spawn_cell` | :176 | ★ Ближайшая СВОБОДНАЯ клетка появления рядом с дверью (защита от body-block: |
+| `room_defined_spawn_cell` | :199 | ★ Выделенная СПАВН-КЛЕТКА игрока в комнате — берётся НЕ из позиции смерти |
+| `room_initial_spawn_cell` | :219 | ★ Стартовая клетка бойца при ПЕРВОМ появлении в бою (сборка мира). |
+| `room_player_spawn_cell` | :278 | ★ Личная СПАВН-КЛЕТКА бойца в его SPAWN_ROOM — конкретная ВЫДЕЛЕННАЯ клетка, |
+| `rooms_teleport` | :355 | ★ Перенос игрока в другую комнату (аналог срабатывания exit; используется и |
+| `rooms_check_exit_trigger` | :479 | ★ Триггер exit: вызывается когда игрок оказался на клетке с exit |
+| `rooms_register_hooks` | :492 |  |
 
 ### `php/systems/targeting.php` (8 фукн.)
 
@@ -335,17 +373,25 @@
 
 ## Тесты (tests/)
 
-### `tests/harness_engine.php` (7 фукн.)
+### `tests/harness_engine.php` (9 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `t_assert` | :85 |  |
-| `harness_build_state` | :96 |  |
-| `harness_room_loaded` | :133 | Проверка «комната оседла в состоянии»: карта комнаты может лежать либо |
-| `test_exit_transition` | :140 | ------------------------------------------------------------------ T1 |
-| `test_respawn_via_teleport` | :176 | ------------------------------------------------------------------ T2 |
-| `test_poll_room_filtering` | :213 | poll.php — HTTP-эндпоинт: при require сразу исполняет long-poll цикл и |
-| `test_crossroom_targeting` | :252 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
+| `t_assert` | :110 |  |
+| `harness_seed_world` | :134 | ★ Сид мира — тем же кодом, что и настоящий перезапуск сессии. |
+| `harness_build_state` | :182 | Инициализация мира для сценарных тестов: посейдать в фейковый Redis, прочитать |
+| `harness_room_loaded` | :208 | Проверка «комната оседла в состоянии»: карта комнаты может лежать либо |
+| `test_exit_transition` | :215 | ------------------------------------------------------------------ T1 |
+| `test_respawn_via_teleport` | :251 | ------------------------------------------------------------------ T2 |
+| `test_poll_room_filtering` | :288 | poll.php — HTTP-эндпоинт: при require сразу исполняет long-poll цикл и |
+| `test_crossroom_targeting` | :327 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
+| `test_world_reset_restores_initial_state` | :375 | T5. ВОСПРОИЗВОДИМОСТЬ ИЗ НАЧАЛЬНОГО СОСТОЯНИЯ (главная регрессия после |
+
+### `tests/test_lost_update.php` (1 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `check` | :18 |  |
 
 
-<!-- Всего функций: 197 -->
+<!-- Всего функций: 228 -->

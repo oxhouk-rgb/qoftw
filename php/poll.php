@@ -7,7 +7,7 @@
  * серверный — держим соединение до LONG_POLL_TIMEOUT; при изменении версии
  * отдаём мгновенно. Сохранение только через world_save().
  *
- * Контракт ответа (плоский, без обёртки 'data' — сверено с js/game.js):
+ * Контракт ответа (плоский, без обёртки 'data' — сверено с js/net.js/render.js):
  *   version, room, room_id, grid?, objects, traps, npcs, players, projectiles, log,
  *   turn_time, turn_duration, time_to_next_turn, victory, rules
  *   (room/objects/traps/npcs — текущая комната запросившего ?player=;
@@ -109,7 +109,7 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
 }
 
 /**
- * Сборка flat-ответа poll (контракт клиента js/game.js render(data)).
+ * Сборка flat-ответа poll (контракт клиента js/net.js/render.js render(data)).
  *
  * ★ Мультикомнатность: карта в ответе — комната ЗАПРОСИВШЕГО игрока (?player=),
  * а не единая state['room']: раньше все четыре бойца видели карту первой
@@ -144,7 +144,7 @@ function build_poll_response($state, $version, $player_id = null) {
             $p['MOVE_RANGE'] = movement_effective_range($state, $pid);
         }
         // ★ Гарантируем ROOM_ID в контракте: боец обязан иметь комнату даже
-        // если battledata.json не задал поле (тогда — комната legacy-карты).
+        // если снимок бойцов не задал поле (тогда — комната legacy-карты).
         // Без поля клиент считает такого бойца «межкомнатным» и рисует его
         // сразу во всех комнатах поверх чужих стен (баг дублирования).
         if (($p['ROOM_ID'] ?? '') === '' && $cur_room_id !== null && $cur_room_id !== '') {
@@ -156,7 +156,7 @@ function build_poll_response($state, $version, $player_id = null) {
     $by_room = function ($list) use ($cur_room_id, $state) {
         if ($cur_room_id === null || $cur_room_id === '') return $list;
         // ★ Гарантируем ROOM_ID в контракте: сущность без комнаты (старый
-        // battledata.json) относится к legacy-комнате — берём её из карты
+        // без ROOM_ID) относится к legacy-комнате — берём её из карты
         // state['room'], иначе из данных самой сущности. Без поля клиент
         // рисовал такие объекты во всех комнатах сразу (баг дублирования).
         $legacy_room_id = $state['room']['room_id'] ?? null;

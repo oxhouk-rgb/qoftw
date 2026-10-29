@@ -31,10 +31,14 @@ game.html / index.html / diag.html  — страницы клиента (вхо�
 css/game.css                        — все стили клиента
 js/                                 — КЛИЕНТ, разбит на модули (см. §5): config, state, utils,
                                       grid, path, animation, render, input, net, main
-data/battledata.json                — бойцы/объекты/ловушки/NPC + комнаты старта
-data/{A1,A5,B1,E1,E5}.json          — карты комнат (grid: 1=проходимо, 0=стена; exits/exit_rooms)
+data/initial_snapshot.json          — ИЗНАЧАЛЬНЫЕ бойцы (временная подставка под аккаунт игрока)
+data/{A1,A5,B1,E1,E5}.json          — карты комнат (grid: 1=проходимо, 0=стена; exits/exit_rooms,
+                                      spawn_cells, секции objects/traps/npcs — расстановка мира)
 php/config.php                      — Redis-коннект, ключи battle:*, JSON-хелперы, лог
-php/init.php                        — POST: создать бой из data/*.json (flushDB!)
+php/engine/world_builder.php        — ★ сборщик ИЗНАЧАЛЬНОГО состояния мира (код+карты+снимок)
+php/engine/world_reset.php          — ★ перезапуск сессии: build + write (flushDB, version=1)
+tools/reset_world.php               — CLI сброс мира (тот же код, что init.php?reset=1)
+php/init.php                        — GET: проверка готовности мира; ?reset=1 — явный перезапуск
 php/poll.php                        — GET long-poll + серверный тик + snapshot комнаты игрока
 php/action.php                      — POST: валидация + роутинг move/attack/ability
 php/debug.php                       — диагностика окружения (GET)

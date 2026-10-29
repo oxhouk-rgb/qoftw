@@ -140,7 +140,7 @@ function renderGrid(data) {
     // сетке своей карты. Без фильтра спрайты чужих комнат «дублировались» поверх
     // стен видимой комнаты (позиции в разных комнатах координатно совпадают).
     // Строгое сравнение для ВСЕХ типов сущностей: объект/NPC/ловушка без
-    // ROOM_ID — legacy-данные (комната из battledata), они НЕ должны
+    // ROOM_ID — legacy-данные (поле бойцов снимка), они НЕ должны
     // рисоваться поверх любой мультикомнатной карты — иначе турель чужого
     // спавна «дублируется» во всех комнатах сразу (позиции совпадают).
     const inViewRoom = (e) => !viewRoomId || (e && e.ROOM_ID === viewRoomId);
@@ -557,7 +557,7 @@ function createPlayerEntity(player, pid) {
     if (status === 'removed') return null;
     
     el.className = 'entity player-entity status-' + status;
-    // Отражение спрайта при первичной отрисовке (TURN из battledata.json / сервера)
+    // Отражение спрайта при первичной отрисовке (TURN из снимка бойцов / сервера)
     applyTurnClass(el, player.TURN);
     el.style.backgroundColor = player.COLOR || '#888';
     el.style.borderColor = pid === state.playerId ? '#ffffff' : (player.COLOR || '#888');
