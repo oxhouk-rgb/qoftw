@@ -238,5 +238,53 @@
     "15,0": "A5",
     "0,11": "E1",
     "15,11": "E5"
-  }
+  },
+  "objects": [
+    {
+      "IMAGE": "SMALL_BARRELS",
+      "POSITION_XY": "5,5",
+      "STATUS": "INTACT",
+      "HITPOINTS": 3,
+      "ID": "BARRELS1"
+    },
+    {
+      "IMAGE": "SMALL_BARRELS",
+      "POSITION_XY": "10,5",
+      "STATUS": "INTACT",
+      "HITPOINTS": 3,
+      "ID": "BARRELS2"
+    }
+  ],
+  "traps": [
+    {
+      "ALLY": "NONE",
+      "IMAGE": "LAND_MINE",
+      "POSITION_XY": "5,8",
+      "RANGE": 1,
+      "EFFECT": [
+        "STUNNED[2]",
+        "BLEED[2]"
+      ],
+      "DAMAGE": 3,
+      "STATUS": "INTACT",
+      "HITPOINTS": 1,
+      "ID": "MINE1"
+    }
+  ],
+  "npcs": [
+    {
+      "IMAGE": "DEFAULT_TURRET",
+      "ALLY": "NONE",
+      "CUR_TARGET": "NONE",
+      "POSITION_XY": "8,3",
+      "STATUS": "IDLE",
+      "HITPOINTS": 5,
+      "MAX_HITPOINTS": 5,
+      "ATTACK": 2,
+      "ACTIONS": 1,
+      "MAX_ACTIONS": 1,
+      "RANGE": 4,
+      "ID": "TURRET1"
+    }
+  ]
 }

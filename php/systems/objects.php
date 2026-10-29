@@ -20,18 +20,178 @@ require_once __DIR__ . '/effects.php';
 require_once __DIR__ . '/movement.php'; // engine_active_room() — карты комнат для LOS/зон угрозы
 require_once __DIR__ . '/rooms.php';    // room_get() — ленивая загрузка карт комнат NPC
 
-/** Реестр типов автономных объектов (задел: сюда добавляются spawn-объекты способностей) */
+/** Клиентский реестр типов автономных объектов (описания для UI/диагностики) */
 function getAutonomousObjectDefinitions() {
+    $out = [];
+    foreach (getObjectTemplates() as $type => $tpl) {
+        $out[$type] = [
+            'image' => $tpl['image'],
+            'category' => $tpl['category'],
+            'description' => $tpl['description'],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * ★ РЕЕСТР ШАБЛОНОВ ОБЪЕКТОВ / ЛОВУШЕК / NPC — единый источник их характеристик.
+ *
+ * Отвечает на вопрос «где теперь ИЗНАЧАЛЬНОЕ состояние мира, если хранилище —
+ * Redis»: характеристики ТИПА живут в коде (этот реестр), конкретная
+ * РАССТАНОВКА — в JSON-картах комнат (секции objects/traps/npcs файлов
+ * data/<ID>.json). Снимок в Redis — производная этих двух источников, поэтому
+ * мир воспроизводим: reset = перечитать код + карты и записать мир заново
+ * (tools/reset_world.php → seed-файл → Redis). Держать числа в двух местах
+ * нельзя: правка урона мины в данных расходилась бы с описанием в клиентском
+ * реестре, а ability-spawn собирал бы объект «наполовину из прошлого».
+ *
+ * Поля шаблона: category (object|trap|npc — секция state), image (спрайт),
+ * defaults (CAPS-поля экземпляра), description (для клиента и отладки).
+ *
+ * ЗАДЕЛ НА БУДУЩЕЕ: создаваемые способностями объекты (стены, тумбы, миньоны)
+ * регистрируются здесь же — способности вызывают objects_spawn_entity(), поэтому
+ * ни нового хранилища, ни правок рантайма для них не потребуется.
+ */
+function getObjectTemplates() {
     return [
-        'DEFAULT_TURRET' => [
-            'image' => 'DEFAULT_TURRET', 'category' => 'npc',
-            'description' => 'Стационарная турель. Контролирует зону угрозы (RANGE, манхэттен + линия видимости), атакует любого враждебного игрока, попавшего в зону.',
+        // ── Разрушаемые объекты (укрытия) ──
+        'SMALL_BARRELS' => [
+            'category' => 'object', 'image' => 'SMALL_BARRELS',
+            'defaults' => ['HITPOINTS' => 3],
+            'description' => 'Стопка бочек. Неподвижное укрытие: занимает клетку и блокирует линию видимости, разрушается уроном (STATUS DESTROYED).',
         ],
+        // ── Ловушки ──
         'LAND_MINE' => [
-            'image' => 'LAND_MINE', 'category' => 'trap',
-            'description' => 'Ловушка. При входе враждебного игрока на клетку наносит DAMAGE и накладывает EFFECT, после чего срабатывает (TRIGGERED).',
+            'category' => 'trap', 'image' => 'LAND_MINE',
+            'defaults' => [
+                'HITPOINTS' => 1, 'DAMAGE' => 3, 'RANGE' => 1,
+                'EFFECT' => ['STUNNED[2]', 'BLEED[2]'],
+            ],
+            'description' => 'Наземная мина. Взрывается при входе враждебного бойца на клетку: урон + STUNNED/BLEED, затем STATUS TRIGGERED.',
+        ],
+        // ── NPC ──
+        'DEFAULT_TURRET' => [
+            'category' => 'npc', 'image' => 'DEFAULT_TURRET',
+            'defaults' => [
+                'HITPOINTS' => 5, 'MAX_HITPOINTS' => 5, 'ATTACK' => 2, 'RANGE' => 4,
+                'ACTIONS' => 1, 'MAX_ACTIONS' => 1,
+            ],
+            'description' => 'Стационарная турель. Атакует любого враждебного игрока в зоне угрозы (манхэттен-RANGE + LOS), один выстрел за ход.',
         ],
     ];
+}
+
+/**
+ * Канонический набор полей сущности по умолчанию. Единственное место, где они
+ * определены: и сидинг, и спавн собирают экземпляр через objects_build_entity().
+ */
+function objectEntityDefaults($category) {
+    switch ($category) {
+        case 'trap':
+            return ['IMAGE' => '', 'ROOM_ID' => '', 'POSITION_XY' => '0,0', 'STATUS' => 'INTACT',
+                    'HITPOINTS' => 1, 'DAMAGE' => 1, 'RANGE' => 1, 'EFFECT' => [], 'ALLY' => 'NONE'];
+        case 'npc':
+            return ['IMAGE' => '', 'ROOM_ID' => '', 'POSITION_XY' => '0,0', 'STATUS' => 'IDLE',
+                    'HITPOINTS' => 5, 'MAX_HITPOINTS' => 5, 'ATTACK' => 2, 'RANGE' => 4,
+                    'CUR_TARGET' => 'NONE', 'ALLY' => 'NONE', 'ACTIONS' => 1, 'MAX_ACTIONS' => 1];
+        default: // object
+            return ['IMAGE' => '', 'ROOM_ID' => '', 'POSITION_XY' => '0,0', 'STATUS' => 'INTACT',
+                    'HITPOINTS' => 1, 'ALLY' => 'NONE'];
+    }
+}
+
+/** Секция состояния по категории шаблона */
+function objects_section_of($category) {
+    return ['object' => 'objects', 'trap' => 'traps', 'npc' => 'npcs'][$category] ?? 'objects';
+}
+
+/**
+ * Собрать ЭКЗЕМПЛЯР сущности: дефолты категории ← defaults шаблона ← override
+ * из карты комнаты (ID / POSITION_XY / ROOM_ID / ALLY / отдельные статы).
+ * Один путь сборки и для стартового сида, и для будущих spawn-способностей.
+ * @return array|null null — неизвестный тип (вызывающий решает, ругаться или нет)
+ */
+function objects_build_entity($type, $overrides = [], $default_room_id = null) {
+    $tpl = getObjectTemplates()[$type] ?? null;
+    if ($tpl === null) return null;
+    $category = $tpl['category'];
+    $entity = objectEntityDefaults($category);
+    $entity['TYPE'] = $type;
+    $entity['IMAGE'] = $tpl['image'];
+    foreach ((array)$tpl['defaults'] as $k => $v) $entity[$k] = $v;
+    foreach ((array)$overrides as $k => $v) $entity[$k] = $v;
+    if (($entity['ROOM_ID'] ?? '') === '' && $default_room_id !== null && $default_room_id !== '') {
+        $entity['ROOM_ID'] = $default_room_id;
+    }
+    if (empty($entity['ID'])) $entity['ID'] = $type;
+    if ($category === 'trap' && is_string($entity['EFFECT'] ?? null)) {
+        $entity['EFFECT'] = [$entity['EFFECT']];
+    }
+    if ($category === 'npc') $entity['THREAT_ZONE'] = [];
+    return $entity;
+}
+
+/**
+ * ★ Расстановка сущностей по карте комнаты — источник ИЗНАЧАЛЬНОГО состояния.
+ * Элемент секции objects/traps/npcs карты = {TYPE (или IMAGE как имя шаблона),
+ * ID?, POSITION_XY, ...override}. Если ID не задан — генерируется
+ * "<TYPE>_<комната>_<номер>". Неизвестный тип или тип чужой секции пропускается
+ * (мир не должен падать из-за опечатки в данных).
+ * @return array ['objects'=>[..], 'traps'=>[..], 'npcs'=>[..]] — словари по ID
+ */
+function objects_layout_from_room($room, $room_id = null) {
+    $rid = $room_id ?? ($room['room_id'] ?? '');
+    $out = ['objects' => [], 'traps' => [], 'npcs' => []];
+    foreach (array_keys($out) as $sec) {
+        foreach ((array)($room[$sec] ?? []) as $i => $item) {
+            if (!is_array($item)) continue;
+            $type = $item['TYPE'] ?? ($item['IMAGE'] ?? null);
+            if (!$type) continue;
+            $tpl = getObjectTemplates()[$type] ?? null;
+            if ($tpl === null || objects_section_of($tpl['category']) !== $sec) continue;
+            $ov = $item;
+            unset($ov['TYPE']);
+            if (empty($ov['ID'])) $ov['ID'] = $type . '_' . $rid . '_' . ($i + 1);
+            $entity = objects_build_entity($type, $ov, $rid);
+            $out[$sec][$entity['ID']] = $entity;
+        }
+    }
+    return $out;
+}
+
+/**
+ * ★ СПАВН экземпляра сущности в мире (сюда придут spawn-объекты способностей).
+ * Только мутирует переданный $state — сохранение (world_save/world_save_cas)
+ * обязан сделать вызывающий, иначе изменение не дойдёт до Redis и версии.
+ * @return array ['success'=>bool,'message'=>string,'id'=>string|null]
+ */
+function objects_spawn_entity(&$state, $type, $x, $y, $room_id, $creator_id = 'NONE', $overrides = []) {
+    $tpl = getObjectTemplates()[$type] ?? null;
+    if ($tpl === null) {
+        return ['success' => false, 'message' => 'Неизвестный тип объекта: ' . $type, 'id' => null];
+    }
+    if (!isValidPosition($x, $y)) {
+        return ['success' => false, 'message' => 'Координаты вне поля', 'id' => null];
+    }
+    $sec = objects_section_of($tpl['category']);
+    $base_id = $type . '_' . $room_id . '_' . $x . '_' . $y;
+    $id = $base_id;
+    $n = 1;
+    while (isset($state[$sec][$id])) { $id = $base_id . '-' . (++$n); }
+
+    $entity = objects_build_entity($type, array_merge([
+        'ID' => $id,
+        'POSITION_XY' => formatXY($x, $y),
+        'ROOM_ID' => $room_id,
+        'ALLY' => (($creator_id !== null && $creator_id !== '') ? $creator_id : 'NONE'),
+    ], (array)$overrides), $room_id);
+
+    $state[$sec][$id] = $entity;
+    $state = world_log($state, "OBJECT: заспавнен {$type} (#{$id}) в комнате {$room_id} на клетке ({$x},{$y})");
+    if ($tpl['category'] === 'npc') {
+        $state[$sec][$id]['THREAT_ZONE'] = calculateThreatZone($state, $id);
+    }
+    return ['success' => true, 'message' => "Создан объект {$type}", 'id' => $id];
 }
 
 /**

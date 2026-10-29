@@ -3,11 +3,12 @@
  * debug.php — Диагностика окружения и движка (сырой вывод, без JSON).
  *
  * Откройте эту страницу чтобы увидеть что именно ломается: PHP/Redis,
- * наличие файлов, синтаксис модулей, загрузка bootstrap-а, полный цикл
- * init → save → load через engine/world.
+ * наличие файлов, синтаксис модулей, загрузка bootstrap-а, статические данные
+ * мира (карты комнат + снимок бойцов) и round-trip живого мира через Redis.
  *
- * ВАЖНО: этот файл намеренно НЕ использует output buffering; flushDB
- * выполняется только в самом конце, в разделе «Full engine test».
+ * ВАЖНО: этот файл намеренно НЕ использует output buffering и НЕ пишет мир:
+ * проверяются только чтение статики и world_load()/turn_tick() без сохранения.
+ * Полный сброс мира — вне HTTP: `php tools/reset_world.php`.
  */
 
 // Включаем ВСЕ ошибки
@@ -72,8 +73,15 @@ $files = [
     'systems/combat.php' => __DIR__ . '/systems/combat.php',
     'systems/abilities.php' => __DIR__ . '/systems/abilities.php',
     'systems/objects.php' => __DIR__ . '/systems/objects.php',
-    // Данные
-    'battledata.json' => __DIR__ . '/../data/battledata.json',
+    // Ядро движка: сборка ИЗНАЧАЛЬНОГО состояния мира
+    'engine/world_builder.php' => __DIR__ . '/engine/world_builder.php',
+    'systems/rooms.php' => __DIR__ . '/systems/rooms.php',
+    // Инструмент вне HTTP-рантайма (сброс мира в Redis)
+    '../tools/reset_world.php' => __DIR__ . '/../tools/reset_world.php',
+    // Данные: СТАТИКА. Файл data/battledata.json упразднён — рантайм-состояние
+    // боя живёт в Redis, здесь только карты комнат и снимок стартовых бойцов.
+    '../data/initial_snapshot.json' => __DIR__ . '/../data/initial_snapshot.json',
+    '../data/B1.json' => __DIR__ . '/../data/B1.json',
 ];
 
 foreach ($files as $name => $path) {
@@ -136,95 +144,61 @@ try {
     echo "File: " . $e->getFile() . ":" . $e->getLine() . "\n";
 }
 
-echo "\n=== Data files parse ===\n";
-$battle_data = null;
-$room_data = null;
+echo "\n=== Static data (ИЗНАЧАЛЬНОЕ состояние мира: код + карты комнат + снимок бойцов) ===\n";
 try {
-    $data_file = __DIR__ . '/../data/battledata.json';
-    $json_content = file_get_contents($data_file);
-    $battle_data = json_decode($json_content, true);
-    if ($battle_data) {
-        echo "✅ battledata.json parsed OK\n";
-        echo "ROOM: " . ($battle_data['ROOM'] ?? '?') . "\n";
-        echo "UNITS: " . implode(', ', array_keys($battle_data['UNITS'] ?? [])) . "\n";
+    // world_builder НЕ входит в рантайм-загрузку движка (сборка мира — операция
+    // вне игрового тика), поэтому диагностика подключает его сама.
+    require_once __DIR__ . '/engine/world_builder.php';
+    list($snap_players, $snap_err) = world_builder_read_snapshot();
+    if ($snap_err !== null) {
+        echo "❌ initial_snapshot.json: " . $snap_err . "\n";
     } else {
-        echo "❌ battledata.json parse error: " . json_last_error_msg() . "\n";
+        echo "✅ initial_snapshot.json: бойцов=" . count($snap_players)
+            . " (" . implode(', ', array_column($snap_players, 'NICKNAME')) . ")\n";
     }
-
-    $room_file = __DIR__ . '/../data/' . ($battle_data['ROOM'] ?? 'B1.json');
-    $room_json = @file_get_contents($room_file);
-    $room_data = $room_json !== false ? json_decode($room_json, true) : null;
-    if ($room_data) {
-        echo "✅ " . basename($room_file) . " parsed OK\n";
-    } else {
-        echo "❌ Room file не найден/не распарсен: $room_file\n";
+    foreach (world_builder_known_rooms() as $rid) {
+        $card = room_read_static_card($rid);
+        if ($card === null) {
+            echo "❌ комната {$rid}: нет валидной карты data/{$rid}.json\n";
+            continue;
+        }
+        $lay = objects_layout_from_room($card, $rid);
+        echo "✅ " . str_pad($rid, 3) . ": сетка " . ($card['width'] ?? 0) . "x" . ($card['height'] ?? 0)
+            . ", выходов=" . count($card['exits'] ?? [])
+            . ", спавн-клеток=" . count($card['spawn_cells'] ?? [])
+            . " | объекты=" . count($lay['objects'])
+            . " ловушки=" . count($lay['traps'])
+            . " npc=" . count($lay['npcs']) . "\n";
     }
 } catch (Throwable $e) {
-    echo "❌ Error: " . $e->getMessage() . "\n";
+    echo "❌ Ошибка чтения статики: " . $e->getMessage() . "\n";
     echo "File: " . $e->getFile() . ":" . $e->getLine() . "\n";
 }
 
-echo "\n=== Full engine test (world_init via engine/world.php) ===\n";
+echo "\n=== Живой мир в Redis (round-trip через штатный загрузчик) ===\n";
 try {
-    if (!$battle_data || !$room_data) {
-        echo "⚠️ Пропущено: данные не загружены выше\n";
+    $v_raw = getRedis()->get(REDIS_VERSION);
+    $version = ($v_raw === false || $v_raw === null) ? 0 : (int)$v_raw;
+    $seeded = getRedis()->get(REDIS_SEEDED);
+    echo "battle:version = " . ($version > 0 ? $version : "❌ отсутствует") . "\n";
+    echo "battle:seeded  = " . ($seeded === false ? "⚠️ отсутствует" : (string)(int)$seeded) . "\n";
+    if ($version <= 0) {
+        echo "⚠️ Мир не инициализирован — запустите: php tools/reset_world.php\n";
     } else {
-        // Минимальная сборка состояния (как в init.php, сокращённо)
-        $players = [];
-        foreach ($battle_data['UNITS'] as $unit_name => $unit_data) {
-            $position = $unit_data['POSITION_XY'] ?? '0,0';
-            $players[$unit_name] = [
-                'ID' => $unit_name,
-                'CUR_POSITION_XY' => $position,
-                'START_POSITION_XY' => $position,
-                'END_POSITION_XY' => $position,
-                'TURN' => $unit_data['TURN'] ?? 'RIGHT',
-                'STATUS' => 'IDLE',
-                'LIFE' => $unit_data['LIFE'] ?? 3,
-                'MAX_HITPOINTS' => $unit_data['HP'] ?? 10,
-                'HITPOINTS' => $unit_data['HP'] ?? 10,
-                'MAX_SHIELD' => $unit_data['SHIELD'] ?? 0,
-                'SHIELD' => $unit_data['SHIELD'] ?? 0,
-                'ATTACK' => $unit_data['ATTACK'] ?? 2,
-                'DEFENCE' => $unit_data['DEFENCE'] ?? 1,
-                'RESISTANCE' => $unit_data['RESISTANCE'] ?? 0,
-                'RANGE' => $unit_data['RANGE'] ?? 3,
-                'ABILITIES' => $unit_data['ABILITIES'] ?? [],
-                'PASSIVES' => $unit_data['PASSIVES'] ?? [],
-                'NEGATIVES' => [],
-                'ALLY' => $unit_data['ALLY'] ?? 'NONE',
-                'ACTIONS' => 2,
-                'MAX_ACTIONS' => 2,
-                'MOVE_START_TIME' => microtime(true),
-                'MOVE_END_TIME' => microtime(true),
-            ];
-        }
-
-        $state = [
-            'room' => $room_data,
-            'objects' => [],
-            'traps' => [],
-            'npcs' => [],
-            'players' => $players,
-            'projectiles' => [],
-            'log' => [],
-            'turn_time' => time(),
-        ];
-
-        world_init($state); // ⚠️ как раньше: перезаписывает текущий бой в Redis
-        echo "✅ world_init() OK (flushDB + save + версия)\n";
-
         $loaded = world_load();
-        echo "✅ world_load() OK\n";
-        echo "Players in Redis: " . count($loaded['players']) . "\n";
-        echo "Version: " . world_version() . "\n";
-
-        // Быстрая проверка цикла хода без записи
+        echo "✅ world_load(): players=" . count($loaded['players'] ?? [])
+            . " objects=" . count($loaded['objects'] ?? [])
+            . " traps=" . count($loaded['traps'] ?? [])
+            . " npcs=" . count($loaded['npcs'] ?? [])
+            . " rooms=" . count($loaded['rooms'] ?? []) . "\n";
+        $tt = (int)($loaded['turn_time'] ?? 0);
+        echo "turn_time = " . $tt . ($tt > 0 ? "" : "  ❌ дедлайн хода потерян при round-trip") . "\n";
+        echo "version после load = " . world_version() . " (load не должен её двигать)\n";
         turn_tick($loaded);
-        echo "✅ turn_tick() отработал без ошибок\n";
+        echo "✅ turn_tick() отработал без ошибок (без записи в мир)\n";
     }
 } catch (Throwable $e) {
-    echo "❌ Full engine test error: " . $e->getMessage() . "\n";
+    echo "❌ Тест движка на Redis-мире: " . $e->getMessage() . "\n";
     echo "File: " . $e->getFile() . ":" . $e->getLine() . "\n";
     echo "Trace:\n" . $e->getTraceAsString() . "\n";
 }
