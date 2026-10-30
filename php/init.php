@@ -35,8 +35,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 try {
-    // Проверяем расширение Redis
-    if (!extension_loaded('redis')) {
+    // Проверяем наличие клиента Redis (расширение phpredis ИЛИ тестовый двойник
+    // класса Redis — см. tests/fakeredis_stub.php; в рантайме двойника нет,
+    // поэтому поведение боевого кода не меняется).
+    if (!extension_loaded('redis') && !class_exists('Redis')) {
         jsonError('Расширение Redis не установлено. Выполните: pecl install redis');
     }
 
@@ -44,7 +46,7 @@ try {
     // Триггер обязан быть явным: обычный вход игрока НЕ должен обнулять живой бой.
     // Тело читаем напрямую (GET-инициализация тела не имеет — file_get_contents
     // вернёт '' и json_decode даст null).
-    $raw_input = file_get_contents('php://input');
+    $raw_input = requestInput();
     $body = ($raw_input === '' || $raw_input === false) ? null : json_decode($raw_input, true);
     $reset_requested = isset($_GET['reset']) || (is_array($body) && !empty($body['reset']));
 
@@ -97,7 +99,13 @@ try {
     }
 
     $state = world_load();
-    if (empty($state['players'])) {
+    // ★ ПУСТОЙ список бойцов — ЛЕГАЛЬНОЕ состояние (Этап 1: персонажи появляются
+    // только через join.php, «N игроков = N персонажей», 0 игроков = 0 персонажей).
+    // Раньше здесь был фатал 503 («мир собран неполно») — с пустым стартовым
+    // снимком он блокировал бы инициализацию новой сессии до первого подключения.
+    // Секция players обязана существовать как массив (структурная целостность),
+    // но может быть пуста по смыслу.
+    if (!isset($state['players']) || !is_array($state['players'])) {
         jsonError('В Redis нет секции players (мир собран неполно). '
             . 'Пересоберите мир: php tools/reset_world.php', 503);
     }

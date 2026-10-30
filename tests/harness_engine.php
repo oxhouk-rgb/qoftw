@@ -135,7 +135,11 @@ function harness_seed_world() {
     $warnings = [];
 
     // 1) Сборка ИЗ НАЧАЛЬНЫХ данных (код-реестры + карты комнат + снимок бойцов).
-    $built = world_reset_build();
+    // ★ Рантайм-снимок data/initial_snapshot.json пуст (0 игроков = 0 персонажей —
+    //   бойцы приходят через join.php). Тестовый мир собирается из изолированного
+    //   сида tests/data/test_snapshot.json (4 заготовленных бойца), чтобы сценарии
+    //   T1–T5 не зависели от стартовых данных рантайма.
+    $built = world_reset_build(__DIR__ . '/data/test_snapshot.json');
     if (!empty($built['errors'])) {
         echo "FATAL: изначальное состояние мира не собирается:\n";
         foreach ($built['errors'] as $e) echo "   - {$e}\n";
@@ -388,6 +392,17 @@ function test_world_reset_restores_initial_state() {
     };
     $before = $fingerprint(world_load());
 
+    // ★ Тестовый сид: после world_reset_session() мир обязан восстановиться к
+    //   СОСТОЯНИЮ ЭТОГО СИДА, а не рантайм-снимка. Рантайм data/initial_snapshot.json
+    //   пуст (0 игроков = 0 персонажей — бойцы приходят через join.php), поэтому
+    //   reset без явного пути собрал бы пустой players и сравнение секции упало бы.
+    $reset_expected = world_reset_build(__DIR__ . '/data/test_snapshot.json');
+    if (!empty($reset_expected['errors'])) {
+        echo "FATAL: тестовый сид не собирается для сверки после сброса:\n";
+        foreach ($reset_expected['errors'] as $e) echo "   - {$e}\n";
+        exit(1);
+    }
+
     // ── Портим мир так, как это делает живой бой ──
     $state['objects']['BARRELS1']['STATUS']     = 'DESTROYED';   // бочку разбили
     $state['objects']['BARRELS1']['HITPOINTS']  = 0;
@@ -407,14 +422,19 @@ function test_world_reset_restores_initial_state() {
     $v_dirty = (int)($dirty['version'] ?? 0);
     t_assert($v_dirty > 1, 'версия выросла на записи боя (v=' . $v_dirty . ')');
 
-    // ── Перезапуск сессии тем же кодом, что дёргает init.php?reset=1 ──
-    $res = world_reset_session();
+    // ── Перезапуск сессии: тот же код, что дёргает init.php?reset=1, но со
+    //   тестовым сидом (рантайм-снимок пуст — reset по умолчанию собрал бы мир
+    //   без бойцов; параметр snapshot_path world_reset_session поддерживает).──
+    $res = world_reset_session(__DIR__ . '/data/test_snapshot.json');
     t_assert($res['ok'], 'world_reset_session(): сборка+запись прошли: ' . ($res['message'] ?? ''));
     t_assert(empty($res['errors']), 'при сборке нет ошибок данных');
 
     $after = world_load();
+    // Эталон «после» — свежесобранный из сида мир (тот же round-trip через
+    // фейковый Redis, что и у до-сбросового состояния), а не «грязный» $before.
+    $expected_after = $fingerprint($reset_expected['state']);
     $t5_fail = 0;
-    foreach ($before as $sec => $json) {
+    foreach ($expected_after as $sec => $json) {
         $same = ($fingerprint($after)[$sec] === $json);
         if (!$same) $t5_fail++;
         t_assert($same, "секция '{$sec}' после сброса идентична изначальной");

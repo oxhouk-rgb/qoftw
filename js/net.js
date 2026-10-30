@@ -1,11 +1,53 @@
-// net.js — long polling и отправка действий (initGame, poll, sendAction).
+// net.js — long polling, подключение игрока и отправка действий
+// (initGame, joinGame, poll, sendAction).
 // Часть модульного клиента: см. AGENTS.md §5.
 
 /**
- * Инициализация игры - вызов init.php и начало polling
+ * Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js):
+ * POST php/join.php. Сервер валидирует карточку, выделяет слот спавна (uid 1..4)
+ * и CAS-записью добавляет бойца в мир. Повторный вход того же uid идемпотентен
+ * (перезагрузка страницы не создаёт второго персонажа).
+ * @return {Promise<boolean>} true — можно входить на игровой экран
+ */
+async function joinGame(card) {
+    const statusEl = document.getElementById('init-status');
+    try {
+        const resp = await fetch(CONFIG.PHP_URL + 'join.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(card),
+        });
+        const text = await resp.text();
+        let data;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+
+        if (!resp.ok || !data || !data.success) {
+            // 409 — все спавн-места заняты / ник занят; 400 — карточка отклонена.
+            const detail = data && data.message ? data.message : text.substring(0, 200);
+            statusEl.textContent = 'Подключение отклонено (' + resp.status + '): ' + detail;
+            statusEl.style.color = '#ff4444';
+            return false;
+        }
+        if (data.rejoin) {
+            statusEl.textContent = 'Соединение восстановлено: ' + data.message;
+        }
+        // Шаг 3: явный init.php перед боем (см. шапку main.js).
+        return await initGame(data.player_id);
+    } catch (err) {
+        statusEl.textContent = 'Ошибка подключения: ' + err.message;
+        statusEl.style.color = '#ff4444';
+        return false;
+    }
+}
+
+/**
+ * Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт polling.
+ * @param {string|null} playerId id бойца из ответа join.php; null — бойцов в
+ *        мире пока нет (poll найдёт состояние мира как есть).
+ * @return {Promise<boolean>} true — бой загружен, polling запущен
  */
 async function initGame(playerId) {
-    state.playerId = playerId;
+    if (playerId) state.playerId = playerId;
     
     const statusEl = document.getElementById('init-status');
     statusEl.textContent = 'Инициализация боя...';
@@ -20,7 +62,7 @@ async function initGame(playerId) {
             const errorText = await initResp.text();
             statusEl.textContent = 'HTTP ошибка ' + initResp.status + ': ' + errorText;
             statusEl.style.color = '#ff4444';
-            return;
+            return false;
         }
         
         // Получаем текст ответа
@@ -34,7 +76,7 @@ async function initGame(playerId) {
             statusEl.textContent = 'Ошибка парсинга JSON от сервера. Ответ: ' + responseText.substring(0, 200);
             statusEl.style.color = '#ff4444';
             console.log('Raw response:', responseText);
-            return;
+            return false;
         }
         
         if (initData.success) {
@@ -49,14 +91,17 @@ async function initGame(playerId) {
             
             // Начинаем long polling
             startPolling();
+            return true;
         } else {
             statusEl.textContent = 'Ошибка: ' + initData.message;
             statusEl.style.color = '#ff4444';
+            return false;
         }
     } catch (err) {
         statusEl.textContent = 'Ошибка подключения: ' + err.message;
         statusEl.style.color = '#ff4444';
         console.log('Init error:', err);
+        return false;
     }
 }
 
