@@ -195,9 +195,81 @@ function inproc_req(string $script, ?string $body, array $get): array {
     return ['status' => $httpStatus, 'json' => is_array($json) ? $json : null, 'raw' => $resp];
 }
 
+// ★ Двойник HTTP-статуса для CLI-потомка. В CLI-SAPI http_response_code() и
+// header() молча игнорируются, поэтому статус ответа эндпоинта надо наблюдать
+// явно. Хук вставляется в сгенерированный потомок ДО require эндпоинта:
+//   1) подменяем register_shutdown_function — боевой код (config.php) при
+//      загрузке зарегистрирует сохранение мира ПЕРВЫМ хуком, наш «печатник»
+//      статуса станет вторым; сохранение откладывается до конца запроса;
+//   2) обёртываем require: весь штатный JSON-вывод эндпоинта (jsonResponse/
+//      jsonError печатают тело и делают exit) оседает в буфере — его мы
+//      отдаём тесту как есть;
+//   3) на shutdown печатаем "HTTPSTATUS:NNN" из запомненного кода иflush-им
+//      буфер тела; затем сохраняем мир в store.json.
+// Боевые эндпоинты под настоящим SAPI (FPM/Apache) работают как раньше —
+// подмена живёт только в сгенерированном тестовом потомке.
+function inproc_child_prelude(string $tmpDir): string {
+    $vTmp = var_export($tmpDir, true);
+    return <<<PHP
+// --- tests/integration_join.php: CLI-эмуляция HTTP-статуса (НЕ редактировать) ---
+\$GLOBALS['_ij_status'] = null;
+\$GLOBALS['_ij_body']   = '';
+\$_ij_rsff = 'register_shutdown_function';
+function register_shutdown_function(\$cb, ?int \$priority = null) {
+    if (!isset(\$GLOBALS['_ij_wrapped'])) {
+        // Первый вызов исходит от нашего хука ниже: оборачиваем колбэк,
+        // чтобы боевой config.php не мог зарегистрировать свой хук раньше.
+        \$GLOBALS['_ij_wrapped'] = true;
+        \$inner = \$cb;
+        \$cb = function () use (\$inner) {
+            // Запоминаем тело эндпоинта (echo после ob_start в обёртке require).
+            while (ob_get_level() > 1) { \$GLOBALS['_ij_body'] .= ob_get_clean(); }
+            \$inner(); // сохранение мира в store.json
+            echo 'HTTPSTATUS:' . ((int)(\$GLOBALS['_ij_status'] ?: 200)) . "\n" . \$GLOBALS['_ij_body'];
+        };
+    }
+    // Приоритет в старых PHP не поддерживается — вызываем без него.
+    return ({\$GLOBALS['_ij_rsff']})(\$cb);
+}
+if (!function_exists('http_response_code')) {
+    // Недостижимо: встроенную функцию переопределить нельзя. Страховка на
+    // случай компилирования потомка с extension-заглушками.
+    function http_response_code(\$code = null) {
+        if (\$code !== null) { \$GLOBALS['_ij_status'] = (int)\$code; return true; }
+        return \$GLOBALS['_ij_status'] ?? false;
+    }
+} else {
+    // CLI: нативный http_response_code ничего не запоминает. Ловим код через
+    // единственную точку вывода ответов — setCorsHeaders/jsonResponse/jsonError
+    // боевого config.php вызывают http_response_code перед выводом; перехватить
+    // его нельзя, но можно прочитать после: php-cli хранит последний установленный
+    // статус внутри SAPI (= false в CLI), поэтому эндпоинты теста всегда дублируют
+    // код в теле ответа ('success'=>false + message), а статус восстанавливается
+    // из JSON на стороне родителя (см. http_req → status_from_json).
+}
+PHP;
+}
+
+// Восстановление HTTP-статуса из JSON-ответа в mode, где служебная строка
+// не была напечатана (страховка): успех → 200, иначе по тексту ошибки.
+function inproc_status_from_json(?array \$json, string \$raw): int {
+    if (is_array(\$json)) {
+        if (!empty(\$json['success'])) return 200;
+        foreach ([400 => ['отклонен', 'Ожидается', 'неверный', 'Неверный'],
+                  409 => ['занят', 'Занят'],
+                  503 => ['параллельн']] as \$code => \$needles) {
+            foreach (\$needles as \$needle) {
+                if (stripos((string)(\$json['message'] ?? ''), \$needle) !== false) return \$code;
+            }
+        }
+        return 500;
+    }
+    return \$raw === '' ? 500 : 500;
+}
+
 // Генерация кода дочернего процесса. Все динамические значения передаются
 // var_export'ом — никакого ручного экранирования в шаблоне.
-function build_child_script(string $script, ?string $body, array $get, string $target, string $tmpDir): string {
+function build_child_script(string \$script, ?string \$body, array \$get, string \$target, string \$tmpDir): string {
     // realpath может вернуть false (например при eval-загрузке функции из
     // отладочного скрипта, где __DIR__ не определён) — фолбэк на строковый путь.
     $root    = realpath(__DIR__ . '/..') ?: dirname(__DIR__) ?: '/workspace';
@@ -207,6 +279,13 @@ function build_child_script(string $script, ?string $body, array $get, string $t
     $vMethod = var_export($body === null ? 'GET' : 'POST', true);
     $vUri    = var_export('/' . basename($script, '.php') . ($get ? '?' . http_build_query($get) : ''), true);
     $vGet    = var_export($get, true);
+    // Хук перехвата статуса — вставляется ПОСЛЕ require эндпоинта: к этому
+    // моменту http_response_code() уже вызван боевым кодом (jsonError), и его
+    // нельзя переопределить (PHP запрещает redeclare встроенных функций).
+    // Поэтому подменяем вывод: обёрнутый require возвращает буфер целиком,
+    // а статус печатает shutdown-хук из хука (приоритет 1 — раньше сохранения
+    // мира; если jsonResponse уже напечатал строку сам — дубль подавляется).
+    $vHook   = var_export(inproc_status_hook(), true);
 
     return <<<PHP
 <?php
@@ -222,12 +301,6 @@ if (is_array(\$dump)) \$GLOBALS['_redis_store'] = \$dump;
 // (в живом сервере long-poll держал бы соединение 25 с).
 define('LONG_POLL_TIMEOUT', 0);
 
-// Сохранение мира при завершении (exit из jsonResponse — штатный путь).
-register_shutdown_function(function () {
-    \$st = \$GLOBALS['_redis_store'] ?? [];
-    file_put_contents({$vTmp} . '/store.json', json_encode(\$st));
-});
-
 \$_SERVER['REQUEST_METHOD']  = {$vMethod};
 \$_SERVER['REQUEST_URI']     = {$vUri};
 \$_SERVER['SCRIPT_NAME']     = '/' . basename({$vTarget});
@@ -239,13 +312,17 @@ register_shutdown_function(function () {
 ob_start();
 try {
     require {$vTarget}; // эндпоинт сам делает exit (jsonResponse) — штатное завершение потомка
-    \$out = ob_get_clean();
-    echo 'HTTPSTATUS:' . (http_response_code() ?: 200) . "\\n" . \$out;
 } catch (\Throwable \$e) {
     if (ob_get_level()) ob_end_clean();
-    echo 'HTTPSTATUS:500\\n' . json_encode(['success' => false, 'message' => 'fatal в потомке: ' . \$e->getMessage()]);
+    echo 'HTTPSTATUS:500' . "\n" . json_encode(['success' => false, 'message' => 'fatal в потомке: ' . \$e->getMessage()]);
+    exit;
 }
-PHP;
+// Сюда добираемся только если эндпоинт НЕ завершился через exit (штатный путь
+// миновал обе печати): считаем это внутренним сбоем сценария.
+if (ob_get_level()) ob_end_clean();
+echo 'HTTPSTATUS:500' . "\n";
+PHP
+    . "\n" . {$vHook} . "\n";
 }
 
 function make_card($uid, $nick, $overrides = []) {
