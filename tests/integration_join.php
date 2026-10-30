@@ -132,6 +132,8 @@ function http_req(string $script, ?string $body = null, array $get = []): array 
 
 function inproc_req(string $script, ?string $body, array $get): array {
     global $INPROC_TMP;
+    // ★ http_req() вызывается с путями вида '/php/init.php' — оставляем только имя файла.
+    $script = basename($script);
     $target = realpath(__DIR__ . '/../php/' . $script);
     if ($target === false) {
         return ['status' => 404, 'json' => null, 'raw' => 'нет файла ' . $script];
@@ -155,7 +157,13 @@ function inproc_req(string $script, ?string $body, array $get): array {
         2 => ['pipe', 'w'],
     ];
     $proc = proc_open(
-        ['php', '-n', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
+        // ★ БЕЗ флага -n: он отключает загрузку php.ini и всех неисключимых
+        // расширений (ctype/json и т.п.) — боевой код php/join.php использует
+        // ctype_digit() и падал с «Call to undefined function». Расширения из
+        // системного ini безвредны: fake-Redis объявляет класс Redis ДО config.php
+        // и только если он ещё не определён (class_exists guard).
+        // error_reporting=0 глушит штатные warning'и CLI-SAPI (header() и пр.).
+        ['php', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
         $descriptors, $pipes,
         dirname(__DIR__),
         ['BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json', 'PATH' => getenv('PATH')]
@@ -180,9 +188,11 @@ function inproc_req(string $script, ?string $body, array $get): array {
 
     $resp = (string)@file_get_contents($INPROC_TMP . '/out.txt');
     $httpStatus = 0;
-    if (preg_match('#^HTTPSTATUS:(\d+)\n#', $resp, $m)) {
+    // ★ Служебная строка статуса — ПОСЛЕДНЯЯ строка вывода потомка (хук пишет
+    // тело ответа и только затем HTTPSTATUS:NNN). Парсер срезает её с конца.
+    if (preg_match('/\n?HTTPSTATUS:(\d+)\s*$/', $resp, $m)) {
         $httpStatus = (int)$m[1];
-        $resp = substr($resp, strlen($m[0]));
+        $resp = substr($resp, 0, -strlen($m[0]));
     }
     if ($httpStatus === 0) {
         // Служебная строка не записана → эндпоинт умер до ответа (фатал).
@@ -220,9 +230,9 @@ function build_child_script(string $script, ?string $body, array $get, string $t
     // Все пути склеиваем ЗДЕСЬ и подставляем готовые литералы через var_export.
     // ★ КРИТИЧНО 2: __DIR__ здесь = каталог ТЕСТА (tests/), а не корень проекта —
     // корень это dirname(__DIR__). Ошибка давала '//tests/...' и фатал потомка.
-    $rootReal = realpath(dirname(__DIR__));
+    $rootReal = realpath(dirname(__FILE__) . '/..');
     if ($rootReal === false) {
-        $rootReal = is_dir('/workspace') ? '/workspace' : dirname(__DIR__);
+        $rootReal = is_dir('/workspace') ? '/workspace' : dirname(__FILE__);
     }
     $root    = $rootReal;
     $vStub   = var_export($rootReal . '/tests/fakeredis_stub.php', true);
@@ -258,6 +268,17 @@ define('LONG_POLL_TIMEOUT', 0);
 \$_SERVER['HTTP_ORIGIN']     = 'http://localhost';
 \$_GET  = {$vGet};
 \$_POST = [];
+
+// ★ Сохранение изменённого мира обратно в store.json — ПЕРВЫМ shutdown-хуком.
+// Порядок регистрации критичен: PHP вызывает shutdown-функции в порядке их
+// регистрации, а эндпоинты завершаются через exit внутри require() ниже.
+// Хук сохранения обязан отработать раньше хука ответа — иначе parent прочитает
+// устаревший dump и все проверки состава мира сорвутся.
+// ★ use ({...литерал...}) синтаксически недопустим — путь подставляется телом
+// замыкания как литерал (var_export выше), а не списком use.
+register_shutdown_function(function () {
+    file_put_contents({$vStore}, json_encode((object)(\$GLOBALS['_redis_store'] ?? [])));
+});
 
 // ── эмуляция HTTP-ответа для CLI (см. комментарий у build_child_script) ──
 register_shutdown_function(function () {
