@@ -152,7 +152,7 @@ try {
         jsonError('Расширение Redis не установлено. Выполните: pecl install redis');
     }
 
-    $raw_input = file_get_contents('php://input');
+    $raw_input = requestInput();
     $input = json_decode((string)$raw_input, true);
     if (!is_array($input)) {
         jsonError('Неверный формат данных. Ожидается JSON карточки персонажа.', 400);

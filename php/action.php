@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 try {
-    $raw_input = file_get_contents('php://input');
+    $raw_input = requestInput();
     $input = json_decode($raw_input, true);
 
     if (!$input) {

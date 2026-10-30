@@ -46,7 +46,7 @@ try {
     // Триггер обязан быть явным: обычный вход игрока НЕ должен обнулять живой бой.
     // Тело читаем напрямую (GET-инициализация тела не имеет — file_get_contents
     // вернёт '' и json_decode даст null).
-    $raw_input = file_get_contents('php://input');
+    $raw_input = requestInput();
     $body = ($raw_input === '' || $raw_input === false) ? null : json_decode($raw_input, true);
     $reset_requested = isset($_GET['reset']) || (is_array($body) && !empty($body['reset']));
 

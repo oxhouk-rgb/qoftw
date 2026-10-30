@@ -364,6 +364,24 @@ if (!function_exists('jsonResponse')) {
     }
 }
 
+// Чтение тела запроса. В веб-SAPI это нативный php://input. В CLI php://input
+// недоступен (поток пустой), поэтому интеграционный тест (tests/
+// integration_join.php) передаёт тело через файл, путь к которому лежит в
+// переменной окружения BATTLE_TEST_INPUT_FILE. Вне теста переменная не
+// установлена — поведение рантайма не меняется.
+if (!function_exists('requestInput')) {
+    function requestInput() {
+        if (PHP_SAPI === 'cli') {
+            $f = getenv('BATTLE_TEST_INPUT_FILE');
+            if ($f !== false && $f !== '' && is_file($f)) {
+                return (string)file_get_contents($f);
+            }
+            return '';
+        }
+        return file_get_contents('php://input');
+    }
+}
+
 // Обработка ошибки с выводом JSON
 if (!function_exists('jsonError')) {
     function jsonError($message, $code = 500) {

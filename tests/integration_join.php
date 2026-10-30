@@ -2,11 +2,15 @@
 /**
  * ИНТЕГРАЦИОННЫЙ ТЕСТ: HTTP-контракт init.php → join.php → poll.php (Этап 1).
  *
- * Запускается ВСТРОЕННЫМ PHP-сервером (`php -n -S` с auto_prepend_file=
- * tests/fakeredis_stub.php): каждый запрос — отдельная обработка реального
- * эндпоинта, а «Redis» живёт в суперглобале одного процесса сервера. Проверяется
- * ровно то, что нельзя проверить юнит-харнессом: сквозной цикл подключения
- * игроков через HTTP, коды ответов и состав мира после каждого шага.
+ * Два режима прогона:
+ *   A) IN-PROCESS (значение по умолчанию): `php -n tests/integration_join.php`.
+ *      Каждый «запрос» исполняет реальный эндпоинт php/*.php внутри процесса
+ *      теста (подмена $_SERVER/$_GET/php://input + output buffering), fake-redis
+ *      — общий суперглобал. Детерминированно, без сети и без deadlock однопоточного
+ *      `php -S` на long-poll. Проверки состояния мира работают напрямую.
+ *   B) OVER-HTTP: `bash tests/run_integration_join.sh` (HTTP_TRANSPORT=http) —
+ *      настоящие сетевые запросы к `php -n -S ... --serve`; проверяются только
+ *      коды/JSON-контракт (состояние мира у сервера своё).
  *
  * Сценарий (решения по Этапу 1):
  *   1. GET  init.php?reset=1   — сборка НОВОЙ сессии; бойцов 0 («0 игроков = 0 персонажей»);
@@ -66,8 +70,46 @@ function check($cond, $label) {
 }
 
 // ─── Хелперы «HTTP-запросов» ────────────────────────────────────────────────
-// php://input подменить напрямую нельзя — эмулируем тело POST через stream-контекст.
+// Два транспорта запросов:
+// A) IN-PROCESS (значение по умолчанию): каждый вызов исполняет реальный
+//    эндпоинт php/<script>.php в ОТДЕЛЬНОМ дочернем процессе PHP CLI — ровно
+//    как HTTP-запрос к FPM. Так нужно потому, что эндпоинты завершаются через
+//    exit (jsonResponse/jsonError): require внутри процесса теста убил бы его
+//    на первом же успешном ответе. Механика:
+//      • родитель пишет общее состояние fake-redis в tmp/store.json;
+//      • потомок восстанавливает его, эмулирует суперглобальные запроса и
+//        читает тело POST из tmp/body.json вместо php://input (хелпер
+//        requestInput() в php/config.php: в веб-SAPI читает php://input, в CLI
+//        — файл из переменной окружения BATTLE_TEST_INPUT_FILE);
+//      • shutdown-хук потомка сохраняет изменённый мир обратно в store.json;
+//      • вывод потомка — файл out.txt со служебной первой строкой "HTTPSTATUS:NNN".
+//    Fake-Redis живёт в $GLOBALS['_redis_store'] родителя, поэтому проверки
+//    состава мира после каждого шага работают без HTTP-сервера и без deadlock
+//    однопоточного `php -S` на long-poll.
+// B) OVER-HTTP (HTTP_TRANSPORT=http + HTTP_HOST): настоящие сетевые запросы к
+//    `php -n -S ... tests/integration_join.php --serve` из run_integration_join.sh.
+//    В этом режиме проверки состояния мира пропускаются (у сервера своё
+//    хранилище fake-redis), проверяются только коды ответов и JSON-контракт.
+$INTEGRATION_HTTP = (getenv('HTTP_TRANSPORT') === 'http');
+
+if (!$INTEGRATION_HTTP) {
+    // Рабочий каталог in-process-транспорта: tmp-файлы сценария.
+    $INPROC_TMP = sys_get_temp_dir() . '/integration_join_' . getmypid();
+    if (!is_dir($INPROC_TMP)) mkdir($INPROC_TMP, 0777, true);
+    register_shutdown_function(function () use (&$INPROC_TMP) {
+        foreach (glob($INPROC_TMP . '/*') ?: [] as $f) @unlink($f);
+        @rmdir($INPROC_TMP);
+    });
+} else {
+    $INPROC_TMP = null;
+}
+
 function http_req(string $script, ?string $body = null, array $get = []): array {
+    global $INTEGRATION_HTTP, $INPROC_TMP;
+    $script = basename($script); // 'init.php'
+    if (!$INTEGRATION_HTTP) {
+        return inproc_req($script, $body, $get);
+    }
     $url = 'http://' . (getenv('HTTP_HOST') ?: '127.0.0.1:8899') . '/' . basename($script, '.php');
     if ($get) $url .= '?' . http_build_query($get);
     $ctx = stream_context_create(['http' => [
@@ -75,7 +117,7 @@ function http_req(string $script, ?string $body = null, array $get = []): array 
         'header' => "Content-Type: application/json\r\n",
         'content' => $body ?? '',
         'ignore_errors' => true,
-        // ★ Должен превышать LONG_POLL_TIMEOUT сервера (poll.php держит
+        // Должен превышать LONG_POLL_TIMEOUT сервера (poll.php держит
         // соединение до 25 с) — иначе клиент обрывал бы первый же poll.
         'timeout' => 40,
     ]]);
@@ -86,6 +128,119 @@ function http_req(string $script, ?string $body = null, array $get = []): array 
     }
     $json = json_decode((string)$resp, true);
     return ['status' => $status, 'json' => is_array($json) ? $json : null, 'raw' => (string)$resp];
+}
+
+function inproc_req(string $script, ?string $body, array $get): array {
+    global $INPROC_TMP;
+    $target = realpath(__DIR__ . '/../php/' . $script);
+    if ($target === false) {
+        return ['status' => 404, 'json' => null, 'raw' => 'нет файла ' . $script];
+    }
+
+    // Общая «БД» сценария: актуализируем dump перед запуском потомка.
+    $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
+    file_put_contents($INPROC_TMP . '/store.json', json_encode($GLOBALS['_redis_store']));
+    file_put_contents($INPROC_TMP . '/body.json', $body ?? '');
+    @unlink($INPROC_TMP . '/out.txt');
+
+    file_put_contents($INPROC_TMP . '/child.php',
+        build_child_script($script, $body, $get, $target, $INPROC_TMP));
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['file', $INPROC_TMP . '/out.txt', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $proc = proc_open(
+        ['php', '-n', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
+        $descriptors, $pipes,
+        dirname(__DIR__),
+        ['BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json', 'PATH' => getenv('PATH')]
+    );
+    if (!is_resource($proc)) {
+        return ['status' => 500, 'json' => null, 'raw' => 'не удалось запустить дочерний процесс'];
+    }
+    fclose($pipes[0]);
+    $stderr = stream_get_contents($pipes[2]); fclose($pipes[2]);
+    $info = []; $t0 = microtime(true);
+    while (true) {
+        $info = proc_get_status($proc);
+        if (!$info['running']) break;
+        if (microtime(true) - $t0 > 30) { proc_terminate($proc, 9); break; } // страховка от зависания
+        usleep(15000);
+    }
+    proc_close($proc);
+
+    // Потомок сохранил обновлённый мир в store.json (shutdown-хук) — забираем себе.
+    $newStore = json_decode((string)@file_get_contents($INPROC_TMP . '/store.json'), true);
+    if (is_array($newStore)) $GLOBALS['_redis_store'] = $newStore;
+
+    $resp = (string)@file_get_contents($INPROC_TMP . '/out.txt');
+    $httpStatus = 0;
+    if (preg_match('#^HTTPSTATUS:(\d+)\n#', $resp, $m)) {
+        $httpStatus = (int)$m[1];
+        $resp = substr($resp, strlen($m[0]));
+    }
+    if ($httpStatus === 0) {
+        // Служебная строка не записана → эндпоинт умер до ответа (фатал).
+        // Понятная диагностика вместо голого 500.
+        return ['status' => 500, 'json' => null,
+            'raw' => 'эндпоинт завершился без ответа; stderr: ' . substr($stderr, 0, 500)];
+    }
+
+    $json = json_decode($resp, true);
+    return ['status' => $httpStatus, 'json' => is_array($json) ? $json : null, 'raw' => $resp];
+}
+
+// Генерация кода дочернего процесса. Все динамические значения передаются
+// var_export'ом — никакого ручного экранирования в шаблоне.
+function build_child_script(string $script, ?string $body, array $get, string $target, string $tmpDir): string {
+    $root    = realpath(__DIR__ . '/..');
+    $vRoot   = var_export($root, true);
+    $vTarget = var_export($target, true);
+    $vTmp    = var_export($tmpDir, true);
+    $vMethod = var_export($body === null ? 'GET' : 'POST', true);
+    $vUri    = var_export('/' . basename($script, '.php') . ($get ? '?' . http_build_query($get) : ''), true);
+    $vGet    = var_export($get, true);
+
+    return <<<PHP
+<?php
+// Автосгенерирован tests/integration_join.php — НЕ редактировать вручную.
+\$GLOBALS['_redis_store'] = [];
+require {$vRoot} . '/tests/fakeredis_stub.php';   // класс Redis ДО config.php
+putenv('FAKEREDIS_SHARED=1');                     // общее in-memory хранилище процесса
+\$dump = json_decode((string)file_get_contents({$vTmp} . '/store.json'), true);
+if (is_array(\$dump)) \$GLOBALS['_redis_store'] = \$dump;
+
+// Должно быть определено ДО require bootstrap.php: rules.php уважает
+// defined()-guard, а poll.php с LONG_POLL_TIMEOUT=0 отвечает сразу
+// (в живом сервере long-poll держал бы соединение 25 с).
+define('LONG_POLL_TIMEOUT', 0);
+
+// Сохранение мира при завершении (exit из jsonResponse — штатный путь).
+register_shutdown_function(function () {
+    \$st = \$GLOBALS['_redis_store'] ?? [];
+    file_put_contents({$vTmp} . '/store.json', json_encode(\$st));
+});
+
+\$_SERVER['REQUEST_METHOD']  = {$vMethod};
+\$_SERVER['REQUEST_URI']     = {$vUri};
+\$_SERVER['SCRIPT_NAME']     = '/' . basename({$vTarget});
+\$_SERVER['CONTENT_TYPE']    = 'application/json';
+\$_SERVER['HTTP_ORIGIN']     = 'http://localhost';
+\$_GET  = {$vGet};
+\$_POST = [];
+
+ob_start();
+try {
+    require {$vTarget}; // эндпоинт сам делает exit (jsonResponse) — штатное завершение потомка
+    \$out = ob_get_clean();
+    echo 'HTTPSTATUS:' . (http_response_code() ?: 200) . "\\n" . \$out;
+} catch (\Throwable \$e) {
+    if (ob_get_level()) ob_end_clean();
+    echo 'HTTPSTATUS:500\\n' . json_encode(['success' => false, 'message' => 'fatal в потомке: ' . \$e->getMessage()]);
+}
+PHP;
 }
 
 function make_card($uid, $nick, $overrides = []) {
