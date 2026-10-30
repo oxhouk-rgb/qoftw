@@ -6,6 +6,8 @@ let state = {
     playerId: null,
     version: 0,
     data: null,
+    registries: null,   // реестры правил из init.php: {abilities, passives} —
+                        // источник списка для формы настройки персонажа (game.html)
     selectedCell: null,
     polling: false,
     lastRoomId: null,   // ROOM_ID последнего poll-ответа (для перестройки поля при смене комнаты)

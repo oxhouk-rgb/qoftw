@@ -69,6 +69,82 @@ body {
     color: #4ecca3;
 }
 
+/* === ЭКРАН НАСТРОЙКИ ПЕРСОНАЖА (Этап 1: карточка вместо выбора бойца) === */
+#character-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(680px, 92vw);
+}
+
+.setup-subtitle { color: #aaa; }
+
+.setup-group {
+    border: 1px solid #2a3a5c;
+    border-radius: 6px;
+    padding: 12px 16px;
+    background: #16213e;
+}
+
+.setup-group legend {
+    color: #4ecca3;
+    padding: 0 8px;
+    font-size: 1em;
+}
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.setup-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.9em;
+}
+
+.setup-field input[type="text"],
+.setup-field input[type="number"] {
+    background: #0f3460;
+    border: 1px solid #2a3a5c;
+    color: #eee;
+    padding: 8px;
+    border-radius: 4px;
+    font-family: inherit;
+}
+
+.setup-field input:focus { outline: 1px solid #e94560; }
+
+#sel-abilities {
+    width: 100%;
+    background: #0f3460;
+    border: 1px solid #2a3a5c;
+    color: #eee;
+    padding: 6px;
+    border-radius: 4px;
+    font-family: inherit;
+}
+
+#sel-abilities option:checked { background: #e94560; color: #fff; }
+
+.setup-hint { color: #777; font-size: 0.75em; margin-top: 6px; }
+
+#passives-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 6px;
+}
+
+.passive-item { cursor: pointer; font-size: 0.9em; }
+
+.join-btn {
+    border-color: #4ecca3;
+    align-self: center;
+    width: min(320px, 100%);
+}
+
 /* === GAME SCREEN === */
 #game-screen {
     display: grid;

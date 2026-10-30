@@ -15,7 +15,8 @@
  *     "uid":        "7",              // id аккаунта из БД (1..4 — слот спавна)
  *     "nickname":   "IVAN",           // ник из БД
  *     "stats":      { HITPOINTS/MAX_HITPOINTS, SHIELD/MAX_SHIELD, ATTACK,
- *                     DEFENCE, RESISTANCE, RANGE — целые 1..10 },
+ *                     DEFENCE, RESISTANCE, RANGE — целые 1..10;
+ *                     ACTIONS (очки действий) — целое 1..3 },
  *     "abilities":  ["FIRE WAVE", "BLIZZARD", "BACKSTAB"],  // ровно 3 из реестра
  *     "passives":   ["SWIFT", "THORNS"]                      // от 0 до 5 из реестра
  *   }
@@ -57,14 +58,19 @@ if (!defined('JOIN_MAX_PLAYERS')) {
 }
 if (!defined('JOIN_STATS_MIN'))  define('JOIN_STATS_MIN', 1);
 if (!defined('JOIN_STATS_MAX'))  define('JOIN_STATS_MAX', 10);
+// Очки действий (ACTIONS/MAX_ACTIONS) — отдельный диапазон: 1..3 (решение по
+// форме настройки: поле обязательно, значения вне 1..3 отклоняются сервером).
+if (!defined('JOIN_ACTIONS_MIN')) define('JOIN_ACTIONS_MIN', 1);
+if (!defined('JOIN_ACTIONS_MAX')) define('JOIN_ACTIONS_MAX', 3);
 if (!defined('JOIN_ABILITY_COUNT')) define('JOIN_ABILITY_COUNT', 3);
 if (!defined('JOIN_PASSIVES_MAX'))  define('JOIN_PASSIVES_MAX', 5);
 
 /**
- * Число характеристики: строго целое JOIN_STATS_MIN..JOIN_STATS_MAX.
+ * Число характеристики: строго целое min..max (диапазон передаёт вызывающий:
+ * обычные статы 1..10, очки действий 1..3 — единый код проверки на все поля).
  * @return array [int|null, error|null]
  */
-function join_stat_value($raw, $field) {
+function join_stat_value($raw, $field, $min = JOIN_STATS_MIN, $max = JOIN_STATS_MAX) {
     if ($raw === null || $raw === '' || is_array($raw)) {
         return [null, "характеристика {$field}: пропущено значение"];
     }
@@ -72,9 +78,8 @@ function join_stat_value($raw, $field) {
         return [null, "характеристика {$field}: ожидается целое число, получено '" . $raw . "'"];
     }
     $v = (int)$raw;
-    if ($v < JOIN_STATS_MIN || $v > JOIN_STATS_MAX) {
-        return [null, "характеристика {$field}: {$v} вне диапазона "
-            . JOIN_STATS_MIN . ".." . JOIN_STATS_MAX];
+    if ($v < $min || $v > $max) {
+        return [null, "характеристика {$field}: {$v} вне диапазона {$min}..{$max}"];
     }
     return [$v, null];
 }
@@ -174,7 +179,7 @@ try {
         $errors[] = 'nickname: допустимы буквы, цифры, "_", "-" и пробел';
     }
 
-    // ── 2) Характеристики 1..10 ─────────────────────────────────────────────
+    // ── 2) Характеристики: статы 1..10 + очки действий 1..3 ────────────────
     $stats_in = $input['stats'] ?? [];
     if (!is_array($stats_in)) $errors[] = 'stats: ожидается объект характеристик';
     $stat_names = ['HITPOINTS', 'SHIELD', 'ATTACK', 'DEFENCE', 'RESISTANCE', 'RANGE'];
@@ -183,8 +188,12 @@ try {
         list($v, $e) = join_stat_value(is_array($stats_in) ? ($stats_in[$f] ?? null) : null, $f);
         if ($e !== null) $errors[] = $e; else $stats[$f] = $v;
     }
-    // Дальность хода (MAX_ACTIONS) задаёт сборщик по умолчанию; в Этапе 1 она
-    // не выносится на форму — единый источник правила остаётся на сервере.
+    // Очки действий (ACTIONS/MAX_ACTIONS) — обязательное поле формы настройки
+    // (диапазон 1..3). Название в карточке — ACTIONS; сборщик мира принимает
+    // оба имени (ACTIONS/MAX_ACTIONS), синхронизируются парой ниже.
+    list($actions_v, $e) = join_stat_value(is_array($stats_in) ? ($stats_in['ACTIONS'] ?? null) : null,
+        'ACTIONS (очки действий)', JOIN_ACTIONS_MIN, JOIN_ACTIONS_MAX);
+    if ($e !== null) $errors[] = $e; else $stats['ACTIONS'] = $actions_v;
 
     // ── 3) Способности/пассивки против реестров игры ────────────────────────
     list($ability_rows, $errs) = is_array($input)
@@ -264,6 +273,8 @@ try {
             'DEFENCE' => $stats['DEFENCE'],
             'RESISTANCE' => $stats['RESISTANCE'],
             'RANGE' => $stats['RANGE'],
+            'ACTIONS' => $stats['ACTIONS'],
+            'MAX_ACTIONS' => $stats['ACTIONS'], // на старте бойца очки полны
             'ABILITIES' => $ability_rows,
             'PASSIVES' => $passive_names,
             'NEGATIVES' => [],

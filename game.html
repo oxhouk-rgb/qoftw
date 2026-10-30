@@ -3,29 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Battle System - Test</title>
+    <title>Battle System - Настройка персонажа</title>
     <link rel="stylesheet" href="css/game.css">
 </head>
 <body>
     <div id="app">
-        <!-- Экран выбора игрока -->
+        <!-- Экран настройки персонажа (Этап 1: имитация данных аккаунта из БД).
+             Раньше здесь был выбор одного из 4 заготовленных бойцов; теперь
+             карточка составляется вручную и отправляется в php/join.php.
+             В будущем поля uid/nickname будет подставлять аккаунт игрока. -->
         <div id="login-screen">
             <h1>⚔️ BATTLE SYSTEM TEST ⚔️</h1>
-            <p>Выберите игрока для входа:</p>
-            <div id="player-select">
-                <button class="player-btn" data-player="PLAYER1" style="border-color: #ff4444;">
-                    PLAYER1<br><small>NAPALM UNIT</small>
-                </button>
-                <button class="player-btn" data-player="PLAYER2" style="border-color: #4444ff;">
-                    PLAYER2<br><small>FROST KNIGHT</small>
-                </button>
-                <button class="player-btn" data-player="PLAYER3" style="border-color: #44ff44;">
-                    PLAYER3<br><small>SHADOW ROGUE</small>
-                </button>
-                <button class="player-btn" data-player="PLAYER4" style="border-color: #ffaa00;">
-                    PLAYER4<br><small>IRON GUARD</small>
-                </button>
-            </div>
+            <p class="setup-subtitle">Настройка персонажа перед боем</p>
+
+            <form id="character-form" autocomplete="off">
+                <!-- Имитация данных аккаунта (БД/меню аккаунта пока не связано с движком) -->
+                <fieldset class="setup-group">
+                    <legend>Аккаунт</legend>
+                    <label class="setup-field">
+                        <span>UID игрока</span>
+                        <input type="text" id="fld-uid" inputmode="numeric" pattern="[0-9]+"
+                               maxlength="2" placeholder="1..4 (слот спавна)" required>
+                    </label>
+                    <label class="setup-field">
+                        <span>Никнейм</span>
+                        <input type="text" id="fld-nickname" maxlength="24"
+                               placeholder="Ник из БД" required>
+                    </label>
+                </fieldset>
+
+                <!-- Характеристики: числовые поля ввода -->
+                <fieldset class="setup-group">
+                    <legend>Характеристики</legend>
+                    <div class="stat-grid">
+                        <label class="setup-field">
+                            <span>Здоровье <small>1-10</small></span>
+                            <input type="number" id="stat-HITPOINTS" min="1" max="10" step="1" value="10" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Щит <small>1-10</small></span>
+                            <input type="number" id="stat-SHIELD" min="1" max="10" step="1" value="5" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Сопротивление <small>1-9</small></span>
+                            <input type="number" id="stat-RESISTANCE" min="1" max="9" step="1" value="3" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Атака <small>1-10</small></span>
+                            <input type="number" id="stat-ATTACK" min="1" max="10" step="1" value="5" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Защита <small>1-10</small></span>
+                            <input type="number" id="stat-DEFENCE" min="1" max="10" step="1" value="1" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Дальность <small>1-10</small></span>
+                            <input type="number" id="stat-RANGE" min="1" max="10" step="1" value="5" required>
+                        </label>
+                        <label class="setup-field">
+                            <span>Очки действий <small>1-3</small></span>
+                            <input type="number" id="stat-ACTIONS" min="1" max="3" step="1" value="2" required>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <!-- Способности: ровно 3 из реестра игры (список подгружается из init.php) -->
+                <fieldset class="setup-group">
+                    <legend>Способности <small>(ровно 3)</small> — <span id="ability-count">0/3</span></legend>
+                    <select id="sel-abilities" multiple size="6" aria-label="Список способностей"></select>
+                    <p class="setup-hint">Удерживайте Ctrl (Cmd на macOS) для выбора нескольких.</p>
+                </fieldset>
+
+                <!-- Пассивные способности: от 0 до 5 чекбоксов -->
+                <fieldset class="setup-group">
+                    <legend>Пассивные способности <small>(0-5)</small> — <span id="passive-count">0/5</span></legend>
+                    <div id="passives-list"></div>
+                </fieldset>
+
+                <button type="submit" id="btn-join" class="player-btn join-btn">🎮 Подключиться к бою</button>
+            </form>
+
             <div id="init-status"></div>
         </div>
 
