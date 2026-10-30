@@ -138,8 +138,11 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
 
     // Общая «БД» сценария: актуализируем dump перед запуском потомка.
+    // Пустой массив сериализуется как [] — приводим к объекту, иначе json_decode
+    // вернёт список и восстановление хранилища в потомке сорвётся (is_array).
     $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
-    file_put_contents($INPROC_TMP . '/store.json', json_encode($GLOBALS['_redis_store']));
+    file_put_contents($INPROC_TMP . '/store.json',
+        json_encode((object) $GLOBALS['_redis_store']));
     file_put_contents($INPROC_TMP . '/body.json', $body ?? '');
     @unlink($INPROC_TMP . '/out.txt');
 
@@ -195,7 +198,9 @@ function inproc_req(string $script, ?string $body, array $get): array {
 // Генерация кода дочернего процесса. Все динамические значения передаются
 // var_export'ом — никакого ручного экранирования в шаблоне.
 function build_child_script(string $script, ?string $body, array $get, string $target, string $tmpDir): string {
-    $root    = realpath(__DIR__ . '/..');
+    // realpath может вернуть false (например при eval-загрузке функции из
+    // отладочного скрипта, где __DIR__ не определён) — фолбэк на строковый путь.
+    $root    = realpath(__DIR__ . '/..') ?: dirname(__DIR__) ?: '/workspace';
     $vRoot   = var_export($root, true);
     $vTarget = var_export($target, true);
     $vTmp    = var_export($tmpDir, true);

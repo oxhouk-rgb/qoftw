@@ -1,1 +1,3 @@
-*.whl
+tests/_dbg_tmp/
+tests/_dbg_tmp3/
+tests/_dbg_tmp4/
