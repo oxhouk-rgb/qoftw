@@ -83,8 +83,12 @@ function world_builder_index_players($seed) {
     $players = [];
     $errors = [];
     if (!is_array($seed)) return [$players, ['seed-снимок не является объектом']];
-    if (!isset($seed['players']) || !is_array($seed['players']) || !$seed['players']) {
-        return [$players, ['в seed-снимке отсутствует непустой список "players"']];
+    // ★ Пустой список players — ЛЕГАЛЬНОЕ изначальное состояние (Этап 1):
+    // бойцов больше не «заготавливают» в снимке, каждый спавнится только после
+    // подключения через php/join.php. 0 игроков в мире = 0 персонажей; npc/
+    // мины/препятствия владельца не требуют и расставляются из карт комнат.
+    if (!isset($seed['players']) || !is_array($seed['players'])) {
+        return [$players, ['в seed-снимке отсутствует список "players"']];
     }
     foreach ($seed['players'] as $i => $p) {
         if (!is_array($p)) { $errors[] = "players[$i]: не объект"; continue; }
@@ -263,7 +267,11 @@ function world_build_initial($seed_snapshot, $base_state = []) {
         if ($pe) { $errors = array_merge($errors, $pe); continue; }
         $players[$id] = $player;
     }
-    if (!$players) $errors[] = 'мир не собран: нет ни одного корректного бойца';
+    // ★ Пустой список бойцов — НЕ ошибка (Этап 1): изначальное состояние мира
+    // содержит 0 игроков; персонаж появляется только через php/join.php после
+    // подключения («N подключившихся игроков = N персонажей, ноль игроков =
+    // ноль персонажей»). NPC/объекты/ловушки расставляются из карт комнат и
+    // владельца не требуют.
 
     // ── 4) Расстановка объектов/ловушек/NPC ИЗ КАРТ КОМНАТ ──────────────────
     // Единый источник: секции objects/traps/npcs файлов data/<ID>.json +
@@ -337,6 +345,108 @@ function player_defaults() { return world_builder_player_defaults(); }
  */
 function normalize_player($raw, $room_map = []) {
     return world_builder_normalize_player($raw, $room_map);
+}
+
+/**
+ * ★ Служебные клетки спавна карты (Этап 1 — подключение игроков через join.php).
+ * Комнаты A1/A5/E1/E5 содержат в "spawn_cells" заготовки PLAYER1..PLAYER4 —
+ * это служебные точки появления БОЙЦОВ (личных стартов), а не объекты вроде
+ * бочек/турелей. Игрок обязан появляться ровно на своей выделенной клетке,
+ * поэтому она НЕ должна считаться «занятой» для проверки свободных слотов.
+ */
+function world_builder_room_spawn_cells($room) {
+    $out = [];
+    foreach (($room['spawn_cells'] ?? []) as $xy) {
+        if (is_string($xy) && $xy !== '') $out[$xy] = true;
+    }
+    return $out;
+}
+
+/**
+ * ★ Занятые клетки комнаты: позиции других бойцов + тела объектов/NPC/ловушек
+ * (body-block расстановки из карт комнат). Используется php/join.php, чтобы
+ * игрок не мог появиться внутри стены, турели или другого игрока.
+ * @return array ['x,y' => true, ...]
+ */
+function world_builder_occupied_cells($state, $room_id) {
+    $occ = [];
+    $room = room_get($state, $room_id);
+    if ($room === null) return $occ; // неизвестная комната: пусть вызывающий решит
+    foreach (world_builder_room_spawn_cells($room) as $xy => $_) {
+        $occ[$xy] = true;
+    }
+    foreach (($state['players'] ?? []) as $p) {
+        if (empty($p)) continue;
+        if (($p['ROOM_ID'] ?? '') !== $room_id) continue;
+        if (in_array($p['STATUS'] ?? '', ['DEATH', 'DECAY', 'REMOVED'], true)) continue;
+        $xy = $p['CUR_POSITION_XY'] ?? '';
+        if (is_string($xy) && $xy !== '') $occ[$xy] = true;
+    }
+    foreach (['objects', 'npcs', 'traps'] as $sec) {
+        foreach (($state[$sec] ?? []) as $e) {
+            if (($e['ROOM_ID'] ?? '') !== $room_id) continue;
+            $st = $e['STATUS'] ?? '';
+            if ($sec !== 'traps' && in_array($st, ['DESTROYED', 'DEATH', 'DISABLED'], true)) continue;
+            $pos = $e['POSITION_XY'] ?? '';
+            if (!is_string($pos) || $pos === '') continue;
+            $pp = parseXY($pos);
+            $w = max(1, (int)($e['BODY_WIDTH'] ?? 1));
+            $h = max(1, (int)($e['BODY_HEIGHT'] ?? 1));
+            for ($dx = 0; $dx < $w; $dx++) {
+                for ($dy = 0; $dy < $h; $dy++) {
+                    $occ[formatXY($pp['x'] + $dx, $pp['y'] + $dy)] = true;
+                }
+            }
+        }
+    }
+    return $occ;
+}
+
+/**
+ * ★ Выбрать свободную клетку появления для нового бойца в комнате (join.php).
+ * Порядок предпочтений: личная выделенная spawn_cell карты ("8,6") → спираль
+ * вокруг неё → центр комнаты. Клетка обязана быть проходимой и не занятой.
+ * @param array $state   текущее состояние мира (players/objects/npcs/traps/rooms)
+ * @param string $room_id целевая комната
+ * @param string $player_id id проверяемого бойца (исключается из «занятых»)
+ * @return string|null   "x,y" либо null (в комнате нет свободных клеток)
+ */
+function world_builder_find_free_spawn_cell($state, $room_id, $player_id) {
+    $room = room_get($state, $room_id);
+    if ($room === null) return null;
+    $occupied = world_builder_occupied_cells($state, $room_id);
+    unset($occupied[$player_id]); // страховка: своё имя клетки не блокирует
+
+    $ok_cell = function ($x, $y) use ($state, $room_id, $room, $occupied) {
+        if (!isValidPosition($x, $y)) return false;
+        $xy = formatXY($x, $y);
+        if (isset($occupied[$xy])) return false;
+        if (isset($room['exits'][$xy]) || isset($room['exit_rooms'][$xy])) return false;
+        if (room_cell_blocked($state, $room, $x, $y, $room_id)) return false;
+        return true;
+    };
+
+    // Предпочтительная точка: личная spawn_cell карты, иначе центр комнаты.
+    $preferred = room_defined_spawn_cell($room, $player_id);
+    $seeds = [];
+    if (is_string($preferred) && $preferred !== '') $seeds[] = parseXY($preferred);
+    $seeds[] = ['x' => (int)floor(($room['width'] ?? GRID_WIDTH) / 2),
+                'y' => (int)floor(($room['height'] ?? GRID_HEIGHT) / 2)];
+
+    foreach ($seeds as $s) {
+        // Спираль по манхэттен-расстоянию от seed-клетки до края карты.
+        $max_d = (int)(($room['width'] ?? GRID_WIDTH) + ($room['height'] ?? GRID_HEIGHT));
+        for ($d = 0; $d <= $max_d; $d++) {
+            for ($dx = -$d; $dx <= $d; $dx++) {
+                $rem = $d - abs($dx);
+                foreach ((abs($rem) === 0 ? [0] : [$rem, -$rem]) as $dy) {
+                    $x = $s['x'] + $dx; $y = $s['y'] + $dy;
+                    if ($ok_cell($x, $y)) return formatXY($x, $y);
+                }
+            }
+        }
+    }
+    return null;
 }
 
 /**
