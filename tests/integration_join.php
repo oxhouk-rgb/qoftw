@@ -215,13 +215,25 @@ function inproc_req(string $script, ?string $body, array $get): array {
 // Генерация кода дочернего процесса. Все динамические значения передаются
 // var_export'ом — никакого ручного экранирования в шаблоне.
 function build_child_script(string $script, ?string $body, array $get, string $target, string $tmpDir): string {
-    // realpath может вернуть false (например при eval-загрузке функции из
-    // отладочного скрипта, где __DIR__ не определён) — фолбэк на строковый путь.
-    $root    = realpath(__DIR__ . '/..') ?: dirname(__DIR__) ?: '/workspace';
+    // ★ КРИТИЧНО 1: внутри heredoc PHP НЕ вычисляет выражения — конкатенация
+    // вида {$vRoot} . '/tests/...' попадает в шаблон как литерал и ломает require.
+    // Все пути склеиваем ЗДЕСЬ и подставляем готовые литералы через var_export.
+    // ★ КРИТИЧНО 2: __DIR__ здесь = каталог ТЕСТА (tests/), а не корень проекта —
+    // корень это dirname(__DIR__). Ошибка давала '//tests/...' и фатал потомка.
+    $rootReal = realpath(dirname(__DIR__));
+    if ($rootReal === false) {
+        $rootReal = is_dir('/workspace') ? '/workspace' : dirname(__DIR__);
+    }
+    $root    = $rootReal;
+    $vStub   = var_export($rootReal . '/tests/fakeredis_stub.php', true);
+    $vBoot   = var_export($rootReal . '/php/engine/bootstrap.php', true);
+    $vStore  = var_export($tmpDir . '/store.json', true);
+    $vDumpSave = var_export('if (is_resource(\\$GLOBALS[\'_redis_fp\'] ?? null)) { fflush(\\$GLOBALS[\'_redis_fp\']); }', true);
     $vRoot   = var_export($root, true);
     $vTarget = var_export($target, true);
     $vTmp    = var_export($tmpDir, true);
     $vMethod = var_export($body === null ? 'GET' : 'POST', true);
+    $vScript = var_export('/' . basename($target), true); // '/init.php' — для possible script-name проверок
     $vUri    = var_export('/' . basename($script, '.php') . ($get ? '?' . http_build_query($get) : ''), true);
     $vGet    = var_export($get, true);
 
@@ -229,9 +241,9 @@ function build_child_script(string $script, ?string $body, array $get, string $t
 <?php
 // Автосгенерирован tests/integration_join.php — НЕ редактировать вручную.
 \$GLOBALS['_redis_store'] = [];
-require {$vRoot} . '/tests/fakeredis_stub.php';   // класс Redis ДО config.php
+require {$vStub};   // класс Redis ДО config.php
 putenv('FAKEREDIS_SHARED=1');                     // общее in-memory хранилище процесса
-\$dump = json_decode((string)file_get_contents({$vTmp} . '/store.json'), true);
+\$dump = json_decode((string)file_get_contents({$vStore}), true);
 if (is_array(\$dump)) \$GLOBALS['_redis_store'] = \$dump;
 
 // Должно быть определено ДО require bootstrap.php: rules.php уважает
@@ -241,7 +253,7 @@ define('LONG_POLL_TIMEOUT', 0);
 
 \$_SERVER['REQUEST_METHOD']  = {$vMethod};
 \$_SERVER['REQUEST_URI']     = {$vUri};
-\$_SERVER['SCRIPT_NAME']     = '/' . basename({$vTarget});
+\$_SERVER['SCRIPT_NAME']     = {$vScript};
 \$_SERVER['CONTENT_TYPE']    = 'application/json';
 \$_SERVER['HTTP_ORIGIN']     = 'http://localhost';
 \$_GET  = {$vGet};
