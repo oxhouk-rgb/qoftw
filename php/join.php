@@ -233,7 +233,7 @@ try {
         if (count($state['players']) >= JOIN_MAX_PLAYERS) {
             closeRedis();
             jsonError('Все спавн-места заняты (' . JOIN_MAX_PLAYERS . ' из '
-                . JOIN_MAX_PLAYERS . '). Подключение новых игроков невозможно, '\
+                . JOIN_MAX_PLAYERS . '). Подключение новых игроков невозможно, '
                 . 'пока сессия не перезапущена (init.php?reset=1).', 409);
         }
 
