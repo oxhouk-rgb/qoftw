@@ -35,8 +35,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 try {
-    // Проверяем расширение Redis
-    if (!extension_loaded('redis')) {
+    // Проверяем наличие клиента Redis (расширение phpredis ИЛИ тестовый двойник
+    // класса Redis — см. tests/fakeredis_stub.php; в рантайме двойника нет,
+    // поэтому поведение боевого кода не меняется).
+    if (!extension_loaded('redis') && !class_exists('Redis')) {
         jsonError('Расширение Redis не установлено. Выполните: pecl install redis');
     }
 

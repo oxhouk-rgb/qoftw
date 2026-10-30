@@ -26,6 +26,38 @@
  * ВНИМАНИЕ: тест мутирует только «Redis» фейка — боевые файлы data/* не трогаются.
  */
 
+// Режим запуска: integration_join.php может работать в ДВУХ ролях.
+//  1) КЛИЕНТ (по умолчанию): последовательные HTTP-запросы к встроенному
+//     серверу из run_integration_join.sh.
+//  2) РОУТЕР (`php tests/integration_join.php --serve <port>`): тот же файл
+//     поднят как router скрипт `php -S` — каждый входящий запрос проксируется
+//     в реальный эндпоинт php/<script>.php с сохранением метода/тела/GET.
+//     Так тест проверяет сквозной HTTP-контракт, а боевые файлы остаются нетронутыми.
+if (php_sapi_name() === 'cli' && in_array('--serve', $argv ?? [], true)) {
+    integration_serve_router();
+    exit(0);
+}
+
+function integration_serve_router(): void {
+    // ★ В роли маршрутизатора весь код НИЖЕ этого блока (проверки check(),
+    // эмуляция http_req через file_get_contents и т.д.) недопустим — иначе
+    // при каждом запросе сервер «сам себе» отправил бы серию HTTP-запросов
+    // и deadlock'нул однопоточный php -S (клиент = сам сервер).
+    $script = preg_replace('#[^a-z0-9_.-]#i', '', parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
+    $script = ltrim($script, '/');
+    $target = __DIR__ . '/../php/' . $script . '.php';
+    if ($script === '' || !is_file($target)) {
+        http_response_code(404);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => 'router: неизвестный эндпоинт /' . $script]);
+        return;
+    }
+    require $target; // полный контроль над выводом/кодами ответа у эндпоинта
+}
+
+// ─── Дальше идёт только роль «КЛИЕНТ» ───────────────────────────────────────
+$INTEGRATION_ONLY = true; // маркер читаемости: секция не исполняется в --serve
+
 $PASS = 0; $FAIL = 0;
 function check($cond, $label) {
     global $PASS, $FAIL;
@@ -36,14 +68,16 @@ function check($cond, $label) {
 // ─── Хелперы «HTTP-запросов» ────────────────────────────────────────────────
 // php://input подменить напрямую нельзя — эмулируем тело POST через stream-контекст.
 function http_req(string $script, ?string $body = null, array $get = []): array {
-    $url = 'http://' . $_SERVER['HTTP_HOST'] . '/' . basename($script);
+    $url = 'http://' . (getenv('HTTP_HOST') ?: '127.0.0.1:8899') . '/' . basename($script, '.php');
     if ($get) $url .= '?' . http_build_query($get);
     $ctx = stream_context_create(['http' => [
         'method' => $body === null ? 'GET' : 'POST',
         'header' => "Content-Type: application/json\r\n",
         'content' => $body ?? '',
         'ignore_errors' => true,
-        'timeout' => 15,
+        // ★ Должен превышать LONG_POLL_TIMEOUT сервера (poll.php держит
+        // соединение до 25 с) — иначе клиент обрывал бы первый же poll.
+        'timeout' => 40,
     ]]);
     $resp = @file_get_contents($url, false, $ctx);
     $status = 0;

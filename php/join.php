@@ -148,7 +148,7 @@ function join_validate_passives($raw_list) {
 }
 
 try {
-    if (!extension_loaded('redis')) {
+    if (!extension_loaded('redis') && !class_exists('Redis')) {
         jsonError('Расширение Redis не установлено. Выполните: pecl install redis');
     }
 
