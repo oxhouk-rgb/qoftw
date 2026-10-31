@@ -173,7 +173,11 @@ try {
             $slot = null;
         }
     }
-    if ($nickname === '' || mb_strlen($nickname) > 24) {
+    // ★ Без ext-mbstring (php -n / минимальные Docker-образы) mb_* недоступен —
+    // деградируем к посимвольной длине: nickname фильтруется ниже регуляркой
+    // по буквам/цифрам, а 24 «байта» для UTF-ника лишь строже, чем 24 символа.
+    $nick_len = function_exists('mb_strlen') ? mb_strlen($nickname) : strlen($nickname);
+    if ($nickname === '' || $nick_len > 24) {
         $errors[] = 'nickname: требуется 1..24 символа';
     } elseif (!preg_match('/^[\p{L}\p{N}_\- ]+$/u', $nickname)) {
         $errors[] = 'nickname: допустимы буквы, цифры, "_", "-" и пробел';
@@ -206,6 +210,11 @@ try {
         jsonError('Карточка персонажа отклонена: ' . implode('; ', $errors), 400);
     }
 
+    // ★ Порядок проверок критичен: сначала валидность карточки (выше, 400),
+    // только затем rejoin-идемпотентность и конфликты слотов (409). Иначе
+    // «повторный вход» чужого uid с битой карточкой молча возвращал бы чужого
+    // бойца (rejoin:true), а не 400, и серверная валидация формы обходится.
+
     // ── 4) Слот спавна: uid 1..4 → комнаты A1/A5/E1/E5 (карты со spawn_cells) ─
     $spawn_rooms = ['A1', 'A5', 'E1', 'E5'];
     $room_id = $spawn_rooms[$slot - 1];
@@ -216,8 +225,16 @@ try {
 
         // Идемпотентность повторного входа: боец этого uid уже в мире — ничего
         // не создаём второй раз (перезагрузка страницы ≠ второй персонаж).
+        // ★ Сравнение по UID аккаунта, а НЕ по 'PLAYER'.slot: при полном лобби
+        // чужой uid, пришедший на занятый слот с другим ником, обязан уйти с
+        // 409 (ниже), а не получить молчаливый rejoin чужого персонажа.
         $player_id = 'PLAYER' . $slot;
-        if (isset($state['players'][$player_id])) {
+        $existing_by_uid = null;
+        foreach ($state['players'] as $pid => $pdat) {
+            if ((string)($pdat['UID'] ?? '') === $uid_raw) { $existing_by_uid = $pid; break; }
+        }
+        if ($existing_by_uid !== null) {
+            $player_id = $existing_by_uid;
             closeRedis();
             ob_end_clean();
             header('Content-Type: application/json; charset=utf-8');

@@ -42,6 +42,22 @@ if (php_sapi_name() === 'cli' && in_array('--serve', $argv ?? [], true)) {
     exit(0);
 }
 
+// ★ Корень проекта — ЕДИНСТВЕННЫЙ источник путей для всех режимов запуска.
+// __DIR__/dirname(__FILE__) работают только при прямом запуске файла; при
+// загрузке кода через eval (отладочные обёртки) они указывают на каталог
+// вызывающего скрипта или не определены вовсе, и тест начинал искать
+// php/*.php в несуществующем '/php/' → все запросы давали ложные 404/500.
+if (!defined('BATTLE_PROJECT_ROOT')) {
+    $root = realpath(dirname(__FILE__) . '/..');
+    if ($root === false) { $root = realpath(__DIR__ . '/..'); }
+    if ($root === false || !is_dir($root . '/php')) {
+        fwrite(STDERR, "integration_join: не удалось определить корень проекта\n");
+        exit(2);
+    }
+    define('BATTLE_PROJECT_ROOT', $root);
+    unset($root);
+}
+
 function integration_serve_router(): void {
     // ★ В роли маршрутизатора весь код НИЖЕ этого блока (проверки check(),
     // эмуляция http_req через file_get_contents и т.д.) недопустим — иначе
@@ -49,7 +65,7 @@ function integration_serve_router(): void {
     // и deadlock'нул однопоточный php -S (клиент = сам сервер).
     $script = preg_replace('#[^a-z0-9_.-]#i', '', parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
     $script = ltrim($script, '/');
-    $target = __DIR__ . '/../php/' . $script . '.php';
+    $target = BATTLE_PROJECT_ROOT . '/php/' . $script . '.php';
     if ($script === '' || !is_file($target)) {
         http_response_code(404);
         header('Content-Type: application/json');
@@ -132,17 +148,23 @@ function http_req(string $script, ?string $body = null, array $get = []): array 
 
 function inproc_req(string $script, ?string $body, array $get): array {
     global $INPROC_TMP;
-    $target = realpath(__DIR__ . '/../php/' . $script);
+    // ★ http_req() вызывается с путями вида '/php/init.php' — оставляем только имя файла.
+    $script = basename($script);
+    $target = realpath(BATTLE_PROJECT_ROOT . '/php/' . $script);
     if ($target === false) {
         return ['status' => 404, 'json' => null, 'raw' => 'нет файла ' . $script];
     }
 
     // Общая «БД» сценария: актуализируем dump перед запуском потомка.
-    // Пустой массив сериализуется как [] — приводим к объекту, иначе json_decode
-    // вернёт список и восстановление хранилища в потомке сорвётся (is_array).
+    // ★ Формат store.json — PHP-сериализация (serialize/unserialize), НЕ JSON:
+    // ключи Redis вида "battle:players" содержат двоеточие, а в JSON-объекте
+    // такие ключи при json_decode+ассоциативном доступе работают, НО пустой
+    // мир после flushdb кодировался как []/{} неоднозначно, и любое повреждение
+    // файла молча превращалось в «хранилище пусто» — тест терял состояние между
+    // запросами. serialize точно сохраняет и пустой массив, и все ключи как есть.
     $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
-    file_put_contents($INPROC_TMP . '/store.json',
-        json_encode((object) $GLOBALS['_redis_store']));
+    $storeDump = serialize($GLOBALS['_redis_store']);
+    file_put_contents($INPROC_TMP . '/store.dat', $storeDump);
     file_put_contents($INPROC_TMP . '/body.json', $body ?? '');
     @unlink($INPROC_TMP . '/out.txt');
 
@@ -155,9 +177,15 @@ function inproc_req(string $script, ?string $body, array $get): array {
         2 => ['pipe', 'w'],
     ];
     $proc = proc_open(
-        ['php', '-n', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
+        // ★ БЕЗ флага -n: он отключает загрузку php.ini и всех неисключимых
+        // расширений (ctype/json и т.п.) — боевой код php/join.php использует
+        // ctype_digit() и падал с «Call to undefined function». Расширения из
+        // системного ini безвредны: fake-Redis объявляет класс Redis ДО config.php
+        // и только если он ещё не определён (class_exists guard).
+        // error_reporting=0 глушит штатные warning'и CLI-SAPI (header() и пр.).
+        ['php', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
         $descriptors, $pipes,
-        dirname(__DIR__),
+        BATTLE_PROJECT_ROOT,
         ['BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json', 'PATH' => getenv('PATH')]
     );
     if (!is_resource($proc)) {
@@ -174,15 +202,19 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
     proc_close($proc);
 
-    // Потомок сохранил обновлённый мир в store.json (shutdown-хук) — забираем себе.
-    $newStore = json_decode((string)@file_get_contents($INPROC_TMP . '/store.json'), true);
+    // Потомок сохранил обновлённый мир в store.dat (shutdown-хук) — забираем себе.
+    $rawStore = @file_get_contents($INPROC_TMP . '/store.dat');
+    $newStore = ($rawStore === false || $rawStore === '') ? null : @unserialize($rawStore);
     if (is_array($newStore)) $GLOBALS['_redis_store'] = $newStore;
+    else file_put_contents($INPROC_TMP . '/store.dat', $storeDump); // страховка: вернуть дамп родителя
 
     $resp = (string)@file_get_contents($INPROC_TMP . '/out.txt');
     $httpStatus = 0;
-    if (preg_match('#^HTTPSTATUS:(\d+)\n#', $resp, $m)) {
+    // ★ Служебная строка статуса — ПОСЛЕДНЯЯ строка вывода потомка (хук пишет
+    // тело ответа и только затем HTTPSTATUS:NNN). Парсер срезает её с конца.
+    if (preg_match('/\n?HTTPSTATUS:(\d+)\s*$/', $resp, $m)) {
         $httpStatus = (int)$m[1];
-        $resp = substr($resp, strlen($m[0]));
+        $resp = substr($resp, 0, -strlen($m[0]));
     }
     if ($httpStatus === 0) {
         // Служебная строка не записана → эндпоинт умер до ответа (фатал).
@@ -192,19 +224,74 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
 
     $json = json_decode($resp, true);
+    // ★ Диагностика отказов: в штатном JSON-контракте у отказа ВСЕГДА есть
+    // непустое поле message (jsonError). Если статус >=400, а сообщения нет —
+    // запрос даже не дошёл до эндпоинта (битый tmp-каталог, фатал до хука),
+    // и молчаливый «ok» рядом с таким артефактом маскировал бы баги транспорта.
+    if ($httpStatus >= 400 && trim((string)($json['message'] ?? '')) === '') {
+        return ['status' => 500, 'json' => is_array($json) ? $json : null,
+            'raw' => 'транспортная аномалия: HTTP ' . $httpStatus
+                . ' без JSON-сообщения эндпоинта; raw=' . substr($resp, 0, 300)
+                . '; stderr=' . substr($stderr, 0, 300)];
+    }
+    // ★ Обратная сторона той же диагностики: успешный ответ (2xx) обязан быть
+    // валидным JSON контракта. Пустой/непарсируемый вывод при 200 означал бы,
+    // что эндпоинт умер ДО записи ответа (например, shutdown-хук потомка не
+    // отработал из-за битого tmp-каталога) — раньше это молча превращалось в
+    // «rejoin:false / success:null» и FAIL'ы шагов 7-8 с плавающей природой.
+    if ($httpStatus < 300 && !is_array($json)) {
+        return ['status' => 500, 'json' => null,
+            'raw' => 'транспортная аномалия: HTTP ' . $httpStatus
+                . ' с непарсируемым телом; raw=' . substr($resp, 0, 300)
+                . '; stderr=' . substr($stderr, 0, 300)];
+    }
     return ['status' => $httpStatus, 'json' => is_array($json) ? $json : null, 'raw' => $resp];
 }
+
+// ★ Эмуляция HTTP-статуса для CLI-потомка. В CLI-SAPI header()/http_response_code()
+// не формируют HTTP-ответ, поэтому статус и тело наблюдаем явно. Механика
+// строится вокруг того, что ВСЕ штатные точки выхода эндпоинтов печатают тело
+// СРАЗУ ПЕРЕД exit и всегда очищают буферы вывода (jsonResponse /
+// sendJsonErrorFallback / ручные ответы join.php и init.php):
+//   • ob_start() в потомке ловит любой echo эндпоинта;
+//   • при завершении скрипта (exit или фатал) shutdown-колбэк забирает буфер,
+//     читает http_response_code() и пишет в stdout: <тело> + перевод строки +
+//     служебная строка "HTTPSTATUS:NNN". В CLI-SAPI http_response_code()
+//     реально запоминает код, пока буфер вывода активен (SAPI php_cli.c), —
+//     поэтому переопределять встроенную функцию не нужно и нельзя;
+//   • inproc_req() родителя режет вывод по последней строке HTTPSTATUS:NNN.
+// Если эндпоинт умер до ответа (фатал с частичным выводом) — страховочная
+// ветка в хуке даёт 500 с тем, что успело напечататься, плюс stderr потомка.
+// Боевые эндпоинты под настоящим SAPI (FPM/Apache) работают как раньше —
+// подмена живёт только в сгенерированном тестовом потомке.
 
 // Генерация кода дочернего процесса. Все динамические значения передаются
 // var_export'ом — никакого ручного экранирования в шаблоне.
 function build_child_script(string $script, ?string $body, array $get, string $target, string $tmpDir): string {
-    // realpath может вернуть false (например при eval-загрузке функции из
-    // отладочного скрипта, где __DIR__ не определён) — фолбэк на строковый путь.
-    $root    = realpath(__DIR__ . '/..') ?: dirname(__DIR__) ?: '/workspace';
+    // ★ КРИТИЧНО 1: внутри heredoc PHP НЕ вычисляет выражения — конкатенация
+    // вида {$vRoot} . '/tests/...' попадает в шаблон как литерал и ломает require.
+    // Все пути склеиваем ЗДЕСЬ и подставляем готовые литералы через var_export.
+    // ★ КРИТИЧНО 2: все пути — от BATTLE_PROJECT_ROOT (определяется в начале
+    // файла). Никаких __DIR__: при eval-загрузке теста он указывает не на tests/.
+    $rootReal = BATTLE_PROJECT_ROOT;
+    $root = $rootReal;
+    $vStub   = var_export($rootReal . '/tests/fakeredis_stub.php', true);
+    $vBoot   = var_export($rootReal . '/php/engine/bootstrap.php', true);
+    $vStore  = var_export($tmpDir . '/store.dat', true);
+    // ★ Дамп хранилища — PHP-serialize (см. комментарий в inproc_req): JSON
+    // неоднозначно кодировал пустой мир и молча терял состояние между запросами.
+    // ★ КРИТИЧНО 3: var_export() ВЕРНЁТ PHP-строку с кавычками — в шаблоне её
+    // нельзя оборачивать в одинарные кавычки ещё раз, иначе вместо кода в child.php
+    // попадёт строковый литерал ('...'), а следующий за ним идентификатор define
+    // даст «Parse error: unexpected identifier». Код дампа вставляем как есть.
+    $vDumpLoad =
+        '$d = @unserialize((string)@file_get_contents(' . var_export($tmpDir . '/store.dat', true) . '));'
+      . "\nif (is_array(\$d)) \$GLOBALS['_redis_store'] = \$d;";
     $vRoot   = var_export($root, true);
     $vTarget = var_export($target, true);
     $vTmp    = var_export($tmpDir, true);
     $vMethod = var_export($body === null ? 'GET' : 'POST', true);
+    $vScript = var_export('/' . basename($target), true); // '/init.php' — для possible script-name проверок
     $vUri    = var_export('/' . basename($script, '.php') . ($get ? '?' . http_build_query($get) : ''), true);
     $vGet    = var_export($get, true);
 
@@ -212,39 +299,52 @@ function build_child_script(string $script, ?string $body, array $get, string $t
 <?php
 // Автосгенерирован tests/integration_join.php — НЕ редактировать вручную.
 \$GLOBALS['_redis_store'] = [];
-require {$vRoot} . '/tests/fakeredis_stub.php';   // класс Redis ДО config.php
+require {$vStub};   // класс Redis ДО config.php
 putenv('FAKEREDIS_SHARED=1');                     // общее in-memory хранилище процесса
-\$dump = json_decode((string)file_get_contents({$vTmp} . '/store.json'), true);
-if (is_array(\$dump)) \$GLOBALS['_redis_store'] = \$dump;
+{$vDumpLoad} // восстановление dump'а хранилища (serialize) перед запросом
 
 // Должно быть определено ДО require bootstrap.php: rules.php уважает
 // defined()-guard, а poll.php с LONG_POLL_TIMEOUT=0 отвечает сразу
 // (в живом сервере long-poll держал бы соединение 25 с).
 define('LONG_POLL_TIMEOUT', 0);
 
-// Сохранение мира при завершении (exit из jsonResponse — штатный путь).
-register_shutdown_function(function () {
-    \$st = \$GLOBALS['_redis_store'] ?? [];
-    file_put_contents({$vTmp} . '/store.json', json_encode(\$st));
-});
-
 \$_SERVER['REQUEST_METHOD']  = {$vMethod};
 \$_SERVER['REQUEST_URI']     = {$vUri};
-\$_SERVER['SCRIPT_NAME']     = '/' . basename({$vTarget});
+\$_SERVER['SCRIPT_NAME']     = {$vScript};
 \$_SERVER['CONTENT_TYPE']    = 'application/json';
 \$_SERVER['HTTP_ORIGIN']     = 'http://localhost';
 \$_GET  = {$vGet};
 \$_POST = [];
 
+// ★ Сохранение изменённого мира обратно в store.json — ПЕРВЫМ shutdown-хуком.
+// Порядок регистрации критичен: PHP вызывает shutdown-функции в порядке их
+// регистрации, а эндпоинты завершаются через exit внутри require() ниже.
+// Хук сохранения обязан отработать раньше хука ответа — иначе parent прочитает
+// устаревший dump и все проверки состава мира сорвутся.
+// ★ use ({...литерал...}) синтаксически недопустим — путь подставляется телом
+// замыкания как литерал (var_export выше), а не списком use.
+register_shutdown_function(function () {
+    // ★ Формат дампа — PHP-serialize (см. комментарий в inproc_req): родитель
+    // читает store.dat через unserialize(). json_encode здесь молча ломал
+    // передачу состояния между запросами (ключи "battle:*", пустой мир [] vs {}),
+    // из-за чего потомки стартовали с ПУСТЫМ хранилищем и все проверки мира падали.
+    file_put_contents({$vStore}, serialize(\$GLOBALS['_redis_store'] ?? []));
+});
+
+// ── эмуляция HTTP-ответа для CLI (см. комментарий у build_child_script) ──
+register_shutdown_function(function () {
+    while (ob_get_level() > 1) { ob_end_clean(); } // мусор вложенных буферов
+    \$buf = ob_get_level() ? ob_get_clean() : '';
+    \$code = http_response_code();                 // CLI: помнит код, пока буфер активен
+    \$out = fopen('php://stdout', 'wb');
+    fwrite(\$out, \$buf);
+    if (substr(\$buf, -1) !== "\n") fwrite(\$out, "\n");
+    fwrite(\$out, 'HTTPSTATUS:' . (int)(\$code === false || \$code === null ? 200 : \$code) . "\n");
+    fclose(\$out);
+});
+
 ob_start();
-try {
-    require {$vTarget}; // эндпоинт сам делает exit (jsonResponse) — штатное завершение потомка
-    \$out = ob_get_clean();
-    echo 'HTTPSTATUS:' . (http_response_code() ?: 200) . "\\n" . \$out;
-} catch (\Throwable \$e) {
-    if (ob_get_level()) ob_end_clean();
-    echo 'HTTPSTATUS:500\\n' . json_encode(['success' => false, 'message' => 'fatal в потомке: ' . \$e->getMessage()]);
-}
+require {$vTarget}; // эндпоинт завершается exit (jsonResponse/jsonError) — shutdown-хук выше соберёт ответ
 PHP;
 }
 
@@ -334,15 +434,60 @@ check(count($players) === 4, 'после rejoin бойцов всё ещё 4 (в
 $r = http_req('/php/join.php', json_encode(make_card(5, 'ECHO')));
 check($r['status'] === 400, 'uid=5 вне слотов 1..4 → 400 (защита статичной сессии)');
 
-// ─── 7. Полное лобби + попытка занять чужой слот другим uid → 409 ───────────
-$r = http_req('/php/join.php', json_encode(make_card(1, 'ZULU'))); // uid=1 занят ALPHA
-check($r['status'] === 409, 'слот занят другим ником → 409 (никнейм занят)');
+// ─── 7. Полное лобби: новый игрок не помещается → 409 ──────────────────────
+// ★ Слоты жёстко привязаны к uid (uid N → PLAYER N), поэтому «пришедший с
+// занятого uid» — это всегда rejoin того же аккаунта (шаг 5, 200), а не чужак.
+// Реальный сценарий переполнения: НОВЫЙ валидный uid (не занят, карточка
+// корректна) при полном лобби из 4 бойцов → сервер обязан отказать 409.
+$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU'))); // uid=3 занят Gamma_X → rejoin
+check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
+    'занятый uid с другим ником — rejoin владельца, а не конфликт (слоты привязаны к uid)');
+$r = http_req('/php/join.php', json_encode(make_card(4, 'ZULU'))); // uid=4 занят DELTA → rejoin
+check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
+    'повторный вход DELTA под новым именем — тоже идемпотентный rejoin');
+// ★ Примечание: любой uid вне 1..4 отсекается валидатором с 400 (шаг 6), а
+// uid внутри 1..4 при полном лобби — это чей-то rejoin. Поэтому штатный
+// «пятый игрок» в статичной сессии не проходит ни одной дверью. Страховочная
+// ветка CAS-цикла join.php («все спавн-места заняты» → 409) проверяется
+// напрямую: временно раздуваем мир fake-Redis до 5 бойцов и шлём валидную
+// карточку нового uid — сервер обязан отказать 409 и НЕ изменить мир.
+// Ключи правим только в хранилище фейка (внешний дамп battle:*), боевые
+// файлы не трогаются; version не инкрементируем — фиктивного 5-го бойца
+// join увидит через loadBattleState из внешнего дампа.
 $st = $GLOBALS['_redis_store'] ?? [];
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 4, 'неудачные попытки не добавили бойцов (всё ещё 4)');
 
+$overfull_backup = $st;                       // снимок мира для восстановления
+$ghost = $players[0];                         // копия реального бойца — валидная структура
+$ghost['ID'] = 'PLAYER9';
+$ghost['UID'] = '9';
+$ghost['NICKNAME'] = 'GHOST';
+$overfull = $players;
+$overfull[] = $ghost;                         // 5 записей: лобби «переполнено»
+// Убираем PLAYER3 с UID='3': тогда uid=3 свободен (не rejoin), а бойцов всё
+// равно 4 (PLAYER1,2,4,GHOST) → включается ровно ветка переполнения join.php.
+$four = array_values(array_filter($overfull, fn($p) => ($p['ID'] ?? '') !== 'PLAYER3'));
+$GLOBALS['_redis_store']['battle:players'] = json_encode($four, JSON_UNESCAPED_UNICODE);
+$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU')));
+check($r['status'] === 409, 'полное лобби (4 бойца) + новый uid → 409 «спавн-места заняты»');
+$st_after = $GLOBALS['_redis_store'] ?? [];
+$players_after = json_decode($st_after['battle:players'] ?? '[]', true);
+check(count($players_after) === 4 && !array_filter($players_after,
+    fn($p) => ($p['NICKNAME'] ?? '') === 'ZULU'),
+    'отказ по переполнению не создал бойца (ошибочный запрос не мутировал мир)');
+$GLOBALS['_redis_store'] = $overfull_backup;  // вернуть настоящий мир сценария
+
 // ─── 8. Серверная валидация битых карточек ──────────────────────────────────
-http_req('/php/init.php', json_encode(['reset' => true])); // новая сессия: 0 бойцов
+// Новая сессия: 0 бойцов. ★ Сброс делаем ПРЯМОЙ манипуляцией хранилищем
+// fake-Redis, а не POST init.php{reset:true}: у init.php контракт GET
+// (?reset=1), тело POST он игнорирует, и вместо сброса получался обычный
+// init — мир шага 7 оставался заполненным, и первый же битый запрос
+// (uid=1) давал бы ложный rejoin 200 вместо ожидаемого отказа 400.
+// Механика повторяет world_reset_write(): flushDB + боевые ключи пустого
+// каркаса + version=1. Фейк без battle:* ключей load читает как пустой мир
+// (json null → []), поэтому достаточно flushDB и версии.
+$GLOBALS['_redis_store'] = ['battle:version' => '1'];
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['abilities' => ['FIRE WAVE', 'ICE SHARD']])));
 check($r['status'] === 400, '2 способности вместо 3 → 400');
@@ -365,7 +510,17 @@ $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 1, 'один игрок = ровно один персонаж (одиночная сессия легальна)');
 
 // ─── 9. Одиночный игрок: боя нет, экран победы отключён ─────────────────────
-require_once __DIR__ . '/../php/engine/bootstrap.php';
+// ★ В роли КЛИЕНТА fake-Redis ещё не подключён (в in-process его грузит каждый
+// дочерний процесс, в HTTP-режиме — сервер). Без него bootstrap.php бросает
+// «Расширение PHP Redis не установлено» и тест обрывался с фаталом на последнем
+// шаге. Подключаем стаб ДО require; FAKEREDIS_SHARED=1 даёт то же общее
+// in-memory хранилище, что видят запросы сценария.
+require_once BATTLE_PROJECT_ROOT . '/tests/fakeredis_stub.php';
+putenv('FAKEREDIS_SHARED=1');
+$GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
+$prevLongPoll = defined('LONG_POLL_TIMEOUT') ? null : true;
+if ($prevLongPoll !== null) define('LONG_POLL_TIMEOUT', 0); // страховка на случай прямого require эндпоинтов
+require_once BATTLE_PROJECT_ROOT . '/php/engine/bootstrap.php';
 $state = world_load();
 $res = engine_check_victory($state);
 check(($res['victory'] ?? true) === false,
