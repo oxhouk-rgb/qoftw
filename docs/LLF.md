@@ -419,12 +419,12 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `integration_serve_router` | :45 |  |
-| `check` | :66 |  |
-| `http_req` | :107 |  |
-| `inproc_req` | :133 |  |
-| `build_child_script` | :200 | var_export'ом — никакого ручного экранирования в шаблоне. |
-| `make_card` | :251 |  |
+| `integration_serve_router` | :61 |  |
+| `check` | :82 |  |
+| `http_req` | :123 |  |
+| `inproc_req` | :149 |  |
+| `build_child_script` | :270 | var_export'ом — никакого ручного экранирования в шаблоне. |
+| `make_card` | :351 |  |
 
 ### `tests/test_lost_update.php` (1 фукн.)
 
