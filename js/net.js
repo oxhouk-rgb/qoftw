@@ -2,6 +2,18 @@
 // (initGame, joinGame, poll, sendAction).
 // Часть модульного клиента: см. AGENTS.md §5.
 
+// ★ Резолвер CONFIG (страховка от ReferenceError). В штатном game.html этот
+// файл загружается ПОСЛЕ js/config.js, где CONFIG объявлен через const — такое
+// объявление создаёт binding глобальной области, и `globalThis.CONFIG` ниже
+// его находит (игровой конфиг с реальным PHP_URL используется всегда, если он
+// есть). Если же net.js загружен без config.js, глобального CONFIG нет —
+// берём безопасный дефолт вместо падения fetch ещё ДО разбора ответа
+// (ReferenceError внутри try ловился catch'ем, и игрок терял игровые
+// сообщения сервера вроде «Вы обездвижены»).
+var CONFIG = (typeof globalThis !== 'undefined' && globalThis.CONFIG)
+    ? globalThis.CONFIG
+    : { PHP_URL: 'php/' };
+
 /**
  * Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js):
  * POST php/join.php. Сервер валидирует карточку, выделяет слот спавна (uid 1..4)
@@ -299,11 +311,17 @@ async function sendAction(action, params) {
                         console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
                         retryNeeded = true;
                     } else {
-                        // Штатные отказые ответы сервера (4xx, например «Вы обездвижены»
-                        // при PARALYZED) приходят с HTTP 400 и JSON-телом {success:false,
-                        // message}. Показываем сообщение сервера как внутриигровое
-                        // предупреждение, а не техническую ошибку. «Ошибка сервера» —
-                        // только для тел без читаемого message (и для 5xx после ретраев).
+                        // ★ КЛЮЧЕВОЕ ДЛЯ ИГРОВОГО UX: штатный отказ правил
+                        // («Вы обездвижены» при PARALYZED, «Игрок оглушен»,
+                        // «Слишком далеко» и т.п.) приходит от action.php под
+                        // HTTP 400 с телом {success:false, message}. Такое тело
+                        // обязан читать ЛЮБОЙ caller sendAction, а не только эта
+                        // функция: раньше здесь возвращался заглушённый
+                        // {message:'HTTP error'}, и обработчики движения/атаки,
+                        // проверяющие result.message, показывали игроку свою
+                        // «Ошибка сервера: 400» вместо игрового предупреждения.
+                        // Поэтому serverMessage прошиваем и в result.message, и
+                        // в result.error (совместимость со старыми полями).
                         let serverMessage = null;
                         try {
                             const errData = JSON.parse(errorText);
@@ -314,10 +332,20 @@ async function sendAction(action, params) {
 
                         if (serverMessage) {
                             showNotification(serverMessage, 'warning');
-                            finalResult = { success: false, message: serverMessage };
+                            finalResult = {
+                                success: false,
+                                message: serverMessage,
+                                error: serverMessage,
+                                http_status: resp.status,
+                            };
                         } else {
                             showNotification('Ошибка сервера: ' + resp.status, 'error');
-                            finalResult = { success: false, message: 'HTTP error' };
+                            finalResult = {
+                                success: false,
+                                message: 'Ошибка сервера: ' + resp.status,
+                                error: 'HTTP error',
+                                http_status: resp.status,
+                            };
                         }
                     }
                 } else {
