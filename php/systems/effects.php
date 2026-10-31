@@ -13,7 +13,8 @@
  * перейти на структуры {name,duration,source} — тогда появятся dispel/иммунитеты.
  *
  * KIND'Ы ЭФФЕКТОВ:
- *   dot      — тикает уроном на turn.start (ticks_damage)
+ *   dot      — тикает уроном на turn.start (ticks_damage); универсальный
+ *              постепенный урон DOT[N] (заменил дубликаты BLEED/POISONED)
  *   cc       — блокирует глаголы (blocks: move|attack|ability|actions);
  *              immediate=true → при наложении вне движения сразу ставит STATUS
  *              и обнуляет ACTIONS (кроме MOVING/DEATH/DECAY — спрайт должен
@@ -39,14 +40,11 @@ require_once __DIR__ . '/../engine/rules.php';
  */
 function getEffectDefinitions() {
     return [
-        // DoT: урон в начале каждого хода
-        'BLEED' => [
+        // DoT: универсальный постепенный урон в начале каждого хода
+        // (заменил дубликаты BLEED/POISONED — механика одна: −1 HP/ход, N ходов)
+        'DOT' => [
             'kind' => 'dot', 'ticks_damage' => 1,
-            'description' => 'Кровотечение: 1 урон за ход',
-        ],
-        'POISONED' => [
-            'kind' => 'dot', 'ticks_damage' => 1,
-            'description' => 'Отравление: 1 урон за ход',
+            'description' => 'Постепенный урон: 1 урон за ход',
         ],
         // CC: блокируют действия; декларируют ЧТО именно
         'STUNNED' => [

@@ -263,7 +263,7 @@
       "RANGE": 1,
       "EFFECT": [
         "STUNNED[2]",
-        "BLEED[2]"
+        "DOT[2]"
       ],
       "DAMAGE": 3,
       "STATUS": "INTACT",

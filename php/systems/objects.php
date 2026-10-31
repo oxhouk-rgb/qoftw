@@ -65,9 +65,9 @@ function getObjectTemplates() {
             'category' => 'trap', 'image' => 'LAND_MINE',
             'defaults' => [
                 'HITPOINTS' => 1, 'DAMAGE' => 3, 'RANGE' => 1,
-                'EFFECT' => ['STUNNED[2]', 'BLEED[2]'],
+                'EFFECT' => ['STUNNED[2]', 'DOT[2]'],
             ],
-            'description' => 'Наземная мина. Взрывается при входе враждебного бойца на клетку: урон + STUNNED/BLEED, затем STATUS TRIGGERED.',
+            'description' => 'Наземная мина. Взрывается при входе враждебного бойца на клетку: урон + STUNNED/DOT, затем STATUS TRIGGERED.',
         ],
         // ── NPC ──
         'DEFAULT_TURRET' => [

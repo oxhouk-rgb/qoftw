@@ -19,71 +19,74 @@ require_once __DIR__ . '/combat.php';
 
 /**
  * Реестр всех способностей (формат прежний — см. шапку).
+ * ★ Типов урона нет: damage — просто урон, поле 'type' из реестра убрано
+ *   (ни сервер, ни клиент его не использовали — снаряды маркируются по
+ *   projectile-механике).
  */
 function getAbilityDefinitions() {
     return [
         // Способности NAPALM UNIT
         'FIRE WAVE' => [
-            'name' => 'FIRE WAVE', 'range' => 3, 'damage' => 4, 'type' => 'fire',
-            'effect' => ['BLEED[2]'], 'aoe' => 0, 'projectile' => 'line',
+            'name' => 'FIRE WAVE', 'range' => 3, 'damage' => 4,
+            'effect' => ['DOT[2]'], 'aoe' => 0, 'projectile' => 'line',
             'description' => 'Огненная волна по прямой линии',
         ],
         'SHOCK GRANADE' => [
-            'name' => 'SHOCK GRANADE', 'range' => 4, 'damage' => 3, 'type' => 'physical',
+            'name' => 'SHOCK GRANADE', 'range' => 4, 'damage' => 3,
             'effect' => ['STUNNED[1]'], 'aoe' => 2, 'projectile' => 'area',
             'description' => 'Шоковая граната с областью поражения',
         ],
         'NAPALM GRANADE' => [
-            'name' => 'NAPALM GRANADE', 'range' => 5, 'damage' => 5, 'type' => 'fire',
-            'effect' => ['BLEED[3]'], 'aoe' => 1, 'projectile' => 'area',
+            'name' => 'NAPALM GRANADE', 'range' => 5, 'damage' => 5,
+            'effect' => ['DOT[3]'], 'aoe' => 1, 'projectile' => 'area',
             'description' => 'Напалмовая граната, поджигает область',
         ],
         // Способности FROST KNIGHT
         'ICE SHARD' => [
-            'name' => 'ICE SHARD', 'range' => 3, 'damage' => 3, 'type' => 'ice',
+            'name' => 'ICE SHARD', 'range' => 3, 'damage' => 3,
             'effect' => ['FROZEN[1]'], 'aoe' => 0, 'projectile' => 'beam',
             'description' => 'Ледяной осколок, замораживает цель',
         ],
         'FROST NOVA' => [
-            'name' => 'FROST NOVA', 'range' => 2, 'damage' => 2, 'type' => 'ice',
+            'name' => 'FROST NOVA', 'range' => 2, 'damage' => 2,
             'effect' => ['FROZEN[2]'], 'aoe' => 2, 'projectile' => 'area',
             'description' => 'Ледяная волна вокруг caster',
         ],
         'BLIZZARD' => [
-            'name' => 'BLIZZARD', 'range' => 5, 'damage' => 4, 'type' => 'ice',
+            'name' => 'BLIZZARD', 'range' => 5, 'damage' => 4,
             'effect' => ['FROZEN[2]', 'SLOWED[2]'], 'aoe' => 3, 'projectile' => 'area',
             'description' => 'Метель, большая область поражения',
         ],
         // Способности SHADOW ROGUE
         'BACKSTAB' => [
-            'name' => 'BACKSTAB', 'range' => 1, 'damage' => 6, 'type' => 'physical',
-            'effect' => ['BLEED[2]'], 'aoe' => 0, 'projectile' => 'none',
+            'name' => 'BACKSTAB', 'range' => 1, 'damage' => 6,
+            'effect' => ['DOT[2]'], 'aoe' => 0, 'projectile' => 'none',
             'description' => 'Удар в спину, высокий урон вблизи',
         ],
         'SMOKE BOMB' => [
-            'name' => 'SMOKE BOMB', 'range' => 3, 'damage' => 0, 'type' => 'physical',
+            'name' => 'SMOKE BOMB', 'range' => 3, 'damage' => 0,
             'effect' => ['BLINDED[2]'], 'aoe' => 2, 'projectile' => 'area',
             'description' => 'Дымовая граната, ослепляет врагов',
         ],
         'POISON BLADE' => [
-            'name' => 'POISON BLADE', 'range' => 2, 'damage' => 2, 'type' => 'poison',
-            'effect' => ['POISONED[3]'], 'aoe' => 0, 'projectile' => 'beam',
+            'name' => 'POISON BLADE', 'range' => 2, 'damage' => 2,
+            'effect' => ['DOT[3]'], 'aoe' => 0, 'projectile' => 'beam',
             'description' => 'Отравленный клинок',
         ],
         // Способности IRON GUARD
         'SHIELD BASH' => [
-            'name' => 'SHIELD BASH', 'range' => 1, 'damage' => 3, 'type' => 'physical',
+            'name' => 'SHIELD BASH', 'range' => 1, 'damage' => 3,
             'effect' => ['STUNNED[1]'], 'aoe' => 0, 'projectile' => 'none',
             'description' => 'Удар щитом, оглушает цель',
         ],
         'FORTIFY' => [
-            'name' => 'FORTIFY', 'range' => 0, 'damage' => 0, 'type' => 'physical',
+            'name' => 'FORTIFY', 'range' => 0, 'damage' => 0,
             'effect' => [], 'aoe' => 0, 'projectile' => 'none',
             'self_buff' => ['SHIELD_RESTORE' => 3],
             'description' => 'Восстанавливает 3 щита',
         ],
         'WAR CRY' => [
-            'name' => 'WAR CRY', 'range' => 3, 'damage' => 0, 'type' => 'physical',
+            'name' => 'WAR CRY', 'range' => 3, 'damage' => 0,
             'effect' => [], 'aoe' => 3, 'projectile' => 'area',
             'ally_buff' => ['ATTACK_UP' => 2],
             'description' => 'Боевой клич, усиливает союзников',
