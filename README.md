@@ -9,7 +9,7 @@
 ## Быстрый старт
 
 ### Требования
-- PHP 7.4+ (с расширением phpredis)
+- PHP 8.0+ (с расширением phpredis)
 - Redis сервер
 - Любой веб-сервер с поддержкой PHP (Apache/Nginx или USBWebServer/OpenServer)
 
