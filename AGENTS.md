@@ -43,7 +43,7 @@ php/engine/world_reset.php          — ★ перезапуск сессии: b
 tools/reset_world.php               — CLI сброс мира (тот же код, что init.php?reset=1)
 php/init.php                        — GET: проверка готовности мира; ?reset=1 — явный перезапуск
 php/poll.php                        — GET long-poll + серверный тик + snapshot комнаты игрока
-php/action.php                      — POST: валидация + роутинг move/attack/ability
+php/action.php                      — POST: валидация + роутинг move/attack/ability/special
 php/debug.php                       — диагностика окружения (GET)
 php/battle.php                      — фасад обратной совместимости (require всего движка)
 php/engine/rules.php                — чистые формулы (ход, урон, поворот)

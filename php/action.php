@@ -72,8 +72,9 @@ try {
 
     // Единая валидация глагола ДО любой мутации состояния (dead/stunned/moving/no-actions).
     // Ловит баги рефакторинга: «мёртвый применяет действия», «залипший STUNNED».
-    // special — тот же исполняющий путь, что ability (см. case ниже), отличается
-    // только выставляемым статусом анимации (SPECIAL вместо ABILITY).
+    // special — отдельный глагол (свой словарь блокировок в effects_blocks и свой
+    // статус анимации SPECIAL), но ИСПОЛНЯЕТСЯ по пути ability: механика у него
+    // обычная способность из реестра, отличается только кадр анимации.
     $known_actions = ['move', 'attack', 'ability', 'special'];
     if (!in_array($action, $known_actions, true)) {
         closeRedis();
@@ -94,10 +95,11 @@ try {
     // а перечитываем свежее состояние, заново валидируем и применяем то же
     // действие поверх него (rebase) и повторяем сохранение. Идемпотентность по
     // action_id выше по-прежнему защищает от двойного применения ретраев.
-    // move|attack|ability|special — словарь effects_blocks знает только
-    // move/attack/ability, поэтому special валидируется/исполняется как ability
-    // (разница лишь в статусе анимации ниже).
-    $verb = ($action === 'special') ? 'ability' : $action;
+    // move|attack|ability|special — каждый глагол проверяется своим ключом
+    // effects_blocks (спецэффекты могут блокировать их выборочно); special
+    // исполняется как ability (switch fallthrough), разница лишь в статусе анимации.
+    $verb = $action;
+    $exec_verb = ($action === 'special') ? 'ability' : $action;
     $result = ['success' => false, 'message' => 'Неизвестное действие'];
     $saved = false;
 
@@ -153,8 +155,10 @@ try {
                     $result = ['success' => false, 'message' => 'Нельзя использовать способность во время движения'];
                     break;
                 }
-                // CC-блокировка способности — спрашиваем effects (не парсим NEGATIVES)
-                $block = effects_blocks($state['players'][$player_id], 'ability');
+                // CC-блокировка способности — спрашиваем effects (не парсим NEGATIVES).
+                // special — самостоятельный глагол в словаре blocks (effects.php),
+                // блокируется теми же cc-эффектами, что ability.
+                $block = effects_blocks($state['players'][$player_id], $exec_verb);
                 if ($block['blocked']) {
                     $result = ['success' => false, 'message' => 'Игрок оглушен'];
                     break;

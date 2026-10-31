@@ -75,7 +75,7 @@
 | `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`) | `getRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `setCorsHeaders()` |
 | `init.php` | Тонкий эндпоинт с ДВУМЯ режимами. **Обычный вход (идемпотентен):** проверяет готовность мира в Redis (`battle:version > 0`, иначе 503 с подсказкой `php tools/reset_world.php`), пропускает состав бойцов через `world_builder_player_errors()`, догружает недостающие карты комнат (`room_get`), пересчитывает `THREAT_ZONE` NPC и вызывает `world_save()` **только если реально что-то изменил** (иначе ложно разбудил бы все long-poll). **Явный перезапуск сессии** (`?reset=1` или POST `{"reset":true}`): `world_reset_session()` — сборка изначального мира + запись (см. `engine/world_reset.php`); при ошибках данных мир НЕ тронут, ответ 500 со списком ошибок. Отдаёт клиенту `rules` + реестры abilities/passives/effects/autonomous_objects | вызывается клиентом после успешного `join.php` (шаг инициализации боя); `?reset=1` — вручную при перезапуске сессии (состав бойцов после reset — пустой, до подключений через join.php) |
 | `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`) | `require bootstrap.php` |
-| `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
+| `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability/special` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
 | `join.php` | ★ **Подключение игрока к бою (Этап 1: имитация данных с аккаунта)** (POST JSON — карточка персонажа: `uid`, `nickname`, `stats` (целые 1..10; ACTIONS 1..3), `abilities` (ровно 3 из реестра), `passives` (0..5 из реестра)). Сервер НЕ доверяет клиенту: мировая валидация карточки (`world_builder_player_errors` + `world_build_player_from_payload`) + собственные проверки; выделяет слот спавна (uid 1..4 → комнаты A1/A5/E1/E5); запись бойца — **CAS по версии мира** (`world_save_cas`, до 3 rebase-попыток против гонки с тиком poll.php/чужим подключением); повторный вход того же uid идемпотентен (`rejoin:true`, отдаётся существующий `player_id`); пятый игрок при занятых слотах → HTTP 409 (поверхностное решение известной проблемы отсутствия лобби). Ответ: `{success, player_id, slot, rejoin?}`. Альянсы: `ALLY='NONE'` (FFA) | вызывается формой настройки `game.html` (`js/net.js: joinGame()`) перед стартом polling |
 | `battle.php` | **Фасад обратной совместимости**: подключает `engine/rules.php` + `bootstrap.php`, содержит делегаты со всеми старыми именами (`processMove`, `processAttack`, `updateMovements`, `checkVictory`, …). Новый код здесь не писать | legacy-алиасы |
 | `debug.php` | Диагностика новой структуры: PHP/Redis, наличие engine/+systems/, `php -l` модулей (если CLI доступен), загрузка фасада, вывод реестров, состав мира в Redis (**только чтение**, живой бой не перезаписывает). Сброс мира здесь отсутствует сознательно — он выполняется через `tools/reset_world.php` / `init.php?reset=1` | standalone-страница |
@@ -338,7 +338,7 @@ poll.php или чужое подключение не затираются. Э�
   STUNNED, SLOWED, BLINDED. Снаряды-визуализации живут в `projectiles` с фазами cast→hit→done
   (1 сек каст + 2 сек полёт/попадание, чистит `turn_update_projectiles`; legacy-фасад
   `updateProjectiles` в battle.php делегирует ему).
-- **TURN (LEFT/RIGHT)**: сервер переписывает при горизонтальном move/attack/ability; вертикаль и
+- **TURN (LEFT/RIGHT)**: сервер переписывает при горизонтальном move/attack/ability/special; вертикаль и
   самоприменение не меняют. Клиент зеркалит через `scaleX(-1)` (класс `turn-left`). Правило CSS:
   новые keyframes либо только filter/box-shadow, либо домножение transform на
   `scaleX(var(--turn-flip))`, иначе сломают отражение. На геймплей TURN пока не влияет.
@@ -368,7 +368,7 @@ poll.php или чужое подключение не затираются. Э�
 | `php/init.php` | GET | — | `{success, message, room, rules, abilities, autonomous_objects, passives, effects}`; сайд-эффект: только пересчёт THREAT_ZONE (мир не трогается); 503, если мир не собран |
 | `php/init.php` | GET `?reset=1` / POST `{"reset":true}` | — | то же + поле `world_reset` (сводка сборки); сайд-эффект: полный rebuild Redis из изначального состояния; ошибки данных → 500 и мир НЕ изменён |
 | `php/poll.php` | GET | `v` (int версия клиента), `player` (PLAYER*, опционально — тики идут в любом случае) | flat snapshot (§4.2, **без обёртки `data`**), опционально `timeout:true` |
-| `php/action.php` | POST | JSON `{action: move\|attack\|ability, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
+| `php/action.php` | POST | JSON `{action: move\|attack\|ability\|special, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
 | `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/SHIELD/MAX_SHIELD/ATTACK/DEFENCE/RESISTANCE/RANGE: 1..10, ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot}` (`rejoin:true` при повторном входе того же uid); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира |
 | `php/debug.php` | GET | — | HTML-дамп диагностики движка и состава мира (не JSON!), только чтение |
 
@@ -447,7 +447,7 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 9. Поля сущностей в CAPS — стиль данных, ожидаемый и движком, и js/render.js (`renderGrid`,
    `updatePlayerEntity`). Переименование поля = синхронная правка PHP + JS + initial_snapshot.json
    (бойцы) / карт комнат (сущности).
-10. `status`-цепочки (`IDLE/MOVING/ATTACK/ABILITY/STUNNED/DEATH/DECAY/REMOVED`, NPC
+10. `status`-цепочки (`IDLE/MOVING/ATTACK/ABILITY/SPECIAL/STUNNED/DEATH/DECAY/REMOVED`, NPC
     `ATTACK/IDLE`, трапы `INTACT/TRIGGERED`, объекты `INTACT/DESTROYED`) читаются и сервером, и
     клиентом (CSS-классы по статусам) — новые статусы добавлять в оба конца. Инвариант
     STATUS↔NEGATIVES поддерживается сам в `turn_tick` — не чинить статусы вручную в системах.

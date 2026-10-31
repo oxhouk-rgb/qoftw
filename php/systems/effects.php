@@ -15,7 +15,7 @@
  * KIND'Ы ЭФФЕКТОВ:
  *   dot      — тикает уроном на turn.start (ticks_damage); универсальный
  *              постепенный урон DOT[N] (заменил дубликаты BLEED/POISONED)
- *   cc       — блокирует глаголы (blocks: move|attack|ability|actions);
+ *   cc       — блокирует глаголы (blocks: move|attack|ability|special|actions);
  *              immediate=true → при наложении вне движения сразу ставит STATUS
  *              и обнуляет ACTIONS (кроме MOVING/DEATH/DECAY — спрайт должен
  *              доехать до клетки мины, см. исторические комментарии)
@@ -47,9 +47,11 @@ function getEffectDefinitions() {
             'description' => 'Постепенный урон: 1 урон за ход',
         ],
         // CC: блокируют действия; декларируют ЧТО именно
+        // (глаголы-ключи: move/attack/ability/special — special = третья
+        //  способность, самостоятельный глагол; 'actions' = блокировка всего)
         'STUNNED' => [
             'kind' => 'cc',
-            'blocks' => ['move', 'attack', 'ability', 'actions'],
+            'blocks' => ['move', 'attack', 'ability', 'special', 'actions'],
             'immediate' => true,           // STATUS='STUNNED' сразу при наложении
             'sets_status' => 'STUNNED',    // какой STATUS ставить/снимать
             'description' => 'Оглушение: полная блокировка действий',
@@ -97,7 +99,7 @@ function effects_has($player, $name) {
 /**
  * Блокирует ли набор NEGATIVES игрока указанный глагол?
  * @param array  $player состояние игрока
- * @param string $verb   'move'|'attack'|'ability'|'actions'
+ * @param string $verb   'move'|'attack'|'ability'|'special'|'actions'
  * @return array ['blocked'=>bool,'reason'=>string]
  */
 function effects_blocks($player, $verb) {
@@ -253,7 +255,7 @@ function effects_tick(&$state, $player_id) {
     // STUNNED навсегда (баг рефакторинга: STATUS снимался только на границе
     // хода/финале движения, а эффект мог истечь посреди хода или игрок мог
     // умереть с висевшим статусом) и обратный случай — cc активен, STATUS нет.
-    if (!in_array($player['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY'], true)) {
+    if (!in_array($player['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY', 'SPECIAL'], true)) {
         $cc = effects_blocks($player, 'actions');
         if ($cc['blocked']) {
             $cp = effects_parse($cc['reason']);

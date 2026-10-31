@@ -85,7 +85,7 @@ function turn_sync_status_after_effect(&$state, $payload) {
     if ($payload['target_type'] !== 'player') return;
     $player = &$state['players'][$payload['target_id']] ?? null;
     if (!$player) { unset($player); return; }
-    if (in_array($player['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'ATTACK', 'ABILITY'], true)) {
+    if (in_array($player['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'ATTACK', 'ABILITY', 'SPECIAL'], true)) {
         unset($player);
         return; // движение/смерть/анимация удара — приоритетнее статусов
     }
@@ -144,7 +144,7 @@ function turn_tick(&$state) {
     //    STUNNED, но никогда не перехватываются шиной — движение доезжает,
     //    удар досвечивается, статус выставит movement-finish/effects_tick.
     foreach ($state['players'] as $pid => &$p) {
-        if (in_array($p['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY'], true)) {
+        if (in_array($p['STATUS'], ['MOVING', 'DEATH', 'DECAY', 'REMOVED', 'ATTACK', 'ABILITY', 'SPECIAL'], true)) {
             continue;
         }
         $cc = effects_blocks($p, 'actions');
@@ -283,12 +283,12 @@ function turn_update_projectiles(&$state) {
     ));
 }
 
-/** Сброс ATTACK/ABILITY → IDLE через секунду (бывш. resetAttackStatus) */
+/** Сброс ATTACK/ABILITY/SPECIAL → IDLE через секунду (бывш. resetAttackStatus) */
 function turn_reset_attack_status(&$state) {
     $now = time();
 
     foreach ($state['players'] as $pid => &$player) {
-        if (($player['STATUS'] === 'ATTACK' || $player['STATUS'] === 'ABILITY') &&
+        if (($player['STATUS'] === 'ATTACK' || $player['STATUS'] === 'ABILITY' || $player['STATUS'] === 'SPECIAL') &&
             isset($player['ATTACK_TIME']) &&
             $now - $player['ATTACK_TIME'] >= ATTACK_RESET_SECONDS) {
             $player['STATUS'] = 'IDLE';

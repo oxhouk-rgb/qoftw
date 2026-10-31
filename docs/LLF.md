@@ -41,7 +41,7 @@
 | `onCellClick` | :7 | Обработчик клика по клетке |
 | `checkAvailableActions` | :43 | Проверка наличия доступных действий для клетки |
 | `showActionDialog` | :72 | Показать диалог действий для клетки |
-| `closeDialog` | :182 | Закрыть диалог |
+| `closeDialog` | :184 | Закрыть диалог |
 
 ### `js/main.js` (10 фукн.)
 
@@ -295,24 +295,24 @@
 | `calculateDamage` | :34 | Формула урона: base (мин 1), сопротивление −10%/очко (кэп 90%), ceil, мин 1. |
 | `combat_apply_damage` | :51 | ★ Единая функция применения урона любой сущности. |
 | `combat_on_damage_dealt` | :145 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
-| `action_validate` | :167 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability). |
-| `combat_process_attack` | :202 | Базовая линейная атака игрока (processAttack из battle.php). |
-| `combat_register_hooks` | :317 |  |
+| `action_validate` | :167 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
+| `combat_process_attack` | :208 | Базовая линейная атака игрока (processAttack из battle.php). |
+| `combat_register_hooks` | :323 |  |
 
 ### `php/systems/effects.php` (10 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `getEffectDefinitions` | :41 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
-| `effects_parse` | :76 |  |
-| `effects_format` | :84 |  |
-| `effects_has` | :89 |  |
-| `effects_blocks` | :103 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
-| `effects_get_modifier` | :120 | Суммарный модификатор стата от всех NEGATIVES носителя. |
-| `effects_apply` | :140 | Наложить эффект (или продлить до max длительности). Единственный способ |
-| `effects_on_applied` | :180 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
-| `effects_tick` | :200 | Прогон NEGATIVES носителя на начале хода (turn.start): |
-| `effects_register_hooks` | :271 |  |
+| `effects_parse` | :78 |  |
+| `effects_format` | :86 |  |
+| `effects_has` | :91 |  |
+| `effects_blocks` | :105 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
+| `effects_get_modifier` | :122 | Суммарный модификатор стата от всех NEGATIVES носителя. |
+| `effects_apply` | :142 | Наложить эффект (или продлить до max длительности). Единственный способ |
+| `effects_on_applied` | :182 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
+| `effects_tick` | :202 | Прогон NEGATIVES носителя на начале хода (turn.start): |
+| `effects_register_hooks` | :273 |  |
 
 ### `php/systems/movement.php` (10 фукн.)
 
