@@ -44,17 +44,17 @@ function getAbilityDefinitions() {
         // Способности FROST KNIGHT
         'ICE SHARD' => [
             'name' => 'ICE SHARD', 'range' => 3, 'damage' => 3,
-            'effect' => ['FROZEN[1]'], 'aoe' => 0, 'projectile' => 'beam',
+            'effect' => ['PARALYZED[1]'], 'aoe' => 0, 'projectile' => 'beam',
             'description' => 'Ледяной осколок, замораживает цель',
         ],
         'FROST NOVA' => [
             'name' => 'FROST NOVA', 'range' => 2, 'damage' => 2,
-            'effect' => ['FROZEN[2]'], 'aoe' => 2, 'projectile' => 'area',
+            'effect' => ['PARALYZED[2]'], 'aoe' => 2, 'projectile' => 'area',
             'description' => 'Ледяная волна вокруг caster',
         ],
         'BLIZZARD' => [
             'name' => 'BLIZZARD', 'range' => 5, 'damage' => 4,
-            'effect' => ['FROZEN[2]', 'SLOWED[2]'], 'aoe' => 3, 'projectile' => 'area',
+            'effect' => ['PARALYZED[2]', 'SLOWED[2]'], 'aoe' => 3, 'projectile' => 'area',
             'description' => 'Метель, большая область поражения',
         ],
         // Способности SHADOW ROGUE

@@ -139,7 +139,7 @@ define('REDIS_DB', 0);
 | `engine/bootstrap.php` | Точка сборки: подключение систем + регистрация слушателей шины в фиксированном порядке |
 | `engine/world_builder.php` | ★ **Единственный сборщик ИЗНАЧАЛЬНОГО состояния мира**: бойцы из `data/initial_snapshot.json` (стартовая клетка — через `spawn_cells` карты комнаты, тем же кодом, что и респаун), расстановка объектов/ловушек/NPC из карт комнат + характеристики из `getObjectTemplates()`, расчёт `THREAT_ZONE`. Чистая функция: ничего не пишет |
 | `engine/world_reset.php` | ★ Перезапуск игровой сессии: `world_reset_build()` (сборка) + `world_reset_write()` (flushDB и запись нового мира, version=1). Один код для CLI (`tools/reset_world.php`) и HTTP (`init.php?reset=1`) |
-| `systems/effects.php` | Реестр статус-эффектов (STUNNED, DOT, FROZEN…): длительность `[N]` ходов, DoT, CC-блокировки |
+| `systems/effects.php` | Реестр статус-эффектов (STUNNED, DOT, PARALYZED…): длительность `[N]` ходов, DoT, CC-блокировки |
 | `systems/combat.php` | Единая цепочка урона: сопротивление/пробитие → щит → HP → смерть; атаки игроков |
 | `systems/movement.php` | Движение: предсказание на копии vs серверное применение, модификаторы дальности/блокировки |
 | `systems/passives.php` | Реестр пассивок как слушатели шины (REGENERATION, ARMORED, ARMOR_CRUSH, SPLASH, THORNS, SWIFT/SLOWED, PUNCTURE) |
@@ -244,7 +244,7 @@ NPC-урон (турель/мина) идёт по единой цепочке �
 ### Негативные эффекты
 | Эффект | Действие |
 |--------|----------|
-| FROZEN[N] | -1 ACTION каждый ход, N ходов |
+| PARALYZED[N] | -1 ACTION каждый ход, N ходов |
 | DOT[N] | -1 HP/ход, N ходов (универсальный постепенный урон; заменил дубликаты POISONED/BLEED) |
 | STUNNED[N] | 0 ACTIONS, N ходов |
 | SLOWED[N] | -2 к дальности перемещения, N ходов |

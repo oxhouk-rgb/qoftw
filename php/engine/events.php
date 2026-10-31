@@ -24,7 +24,7 @@
  * entity.died               | {type,id,killer_type,killer_id}           | fact    | death-chain, логи
  * attack.resolved           | {attacker_id,x,y,hit_cells:[...]}         | fact    | passives(SPLASH)
  * effect.applied            | {target_type,target_id,name,duration}     | fact    | effects(immediate cc activation)
- * movement.query_block      | {player_id,blocked,reason}                | reduce  | effects(STUNNED/FROZEN)
+ * movement.query_block      | {player_id,blocked,reason}                | reduce  | effects(STUNNED/PARALYZED)
  * movement.query_distance   | {player_id,distance}                      | reduce  | passives(SWIFT), effects(SLOWED)
  * movement.interrupted      | {player_id}                               | fact    | movement(остановка на текущей клетке)
  * trap.triggered            | {trap_id,player_id,x,y}                   | fact    | combat/objects

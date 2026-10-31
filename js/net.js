@@ -2,6 +2,25 @@
 // (initGame, joinGame, poll, sendAction).
 // Часть модульного клиента: см. AGENTS.md §5.
 
+// !!! НЕ ОБЪЯВЛЯЙТЕ здесь var/let/const CONFIG !!!
+//
+// Предыстория (регрессия «вечное Подключение к бою...»): сюда была добавлена
+// страховка `var CONFIG = globalThis.CONFIG || {PHP_URL:'php/'}`. Порядок
+// загрузки в game.html: js/config.js → ... → js/net.js → js/main.js.
+// config.js объявляет CONFIG top-level `const` — это binding ГЛОБАЛЬНОЙ
+// лексической области, а НЕ свойство window. `var CONFIG` в net.js создаёт
+// СВОЙСТВО window.CONFIG; для всех скриптов страницы лексический binding
+// имеет приоритет над свойством window, поэтому страховка (а) никогда не
+// использовалась в игре, а (б) при любой попытке усилить её присваиванием
+// (CONFIG = ...) затирала боевой конфиг тестовым дефолтом — join/init
+// уходили по неверному PHP_URL, экран «Подключение к бою...» зависал.
+//
+// Корректная защита от ReferenceError при загрузке net.js БЕЗ config.js —
+// в конце файла: сеттер globalThis.CONFIG, который ставит дефолт ТОЛЬКО если
+// config.js не был загружен (сам config.js свойства window не создаёт) и
+// сохраняет уже заданное значение (харнесс tests/test_sendaction_deadlock.mjs
+// задаёт globalThis.CONFIG ДО eval net.js — сеттер его не трогает).
+
 /**
  * Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js):
  * POST php/join.php. Сервер валидирует карточку, выделяет слот спавна (uid 1..4)
@@ -299,8 +318,42 @@ async function sendAction(action, params) {
                         console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
                         retryNeeded = true;
                     } else {
-                        showNotification('Ошибка сервера: ' + resp.status, 'error');
-                        finalResult = { success: false, message: 'HTTP error' };
+                        // ★ КЛЮЧЕВОЕ ДЛЯ ИГРОВОГО UX: штатный отказ правил
+                        // («Вы обездвижены» при PARALYZED, «Игрок оглушен»,
+                        // «Слишком далеко» и т.п.) приходит от action.php под
+                        // HTTP 400 с телом {success:false, message}. Такое тело
+                        // обязан читать ЛЮБОЙ caller sendAction, а не только эта
+                        // функция: раньше здесь возвращался заглушённый
+                        // {message:'HTTP error'}, и обработчики движения/атаки,
+                        // проверяющие result.message, показывали игроку свою
+                        // «Ошибка сервера: 400» вместо игрового предупреждения.
+                        // Поэтому serverMessage прошиваем и в result.message, и
+                        // в result.error (совместимость со старыми полями).
+                        let serverMessage = null;
+                        try {
+                            const errData = JSON.parse(errorText);
+                            if (errData && typeof errData.message === 'string' && errData.message) {
+                                serverMessage = errData.message;
+                            }
+                        } catch (e) { /* тело не JSON — покажем generic-ошибку */ }
+
+                        if (serverMessage) {
+                            showNotification(serverMessage, 'warning');
+                            finalResult = {
+                                success: false,
+                                message: serverMessage,
+                                error: serverMessage,
+                                http_status: resp.status,
+                            };
+                        } else {
+                            showNotification('Ошибка сервера: ' + resp.status, 'error');
+                            finalResult = {
+                                success: false,
+                                message: 'Ошибка сервера: ' + resp.status,
+                                error: 'HTTP error',
+                                http_status: resp.status,
+                            };
+                        }
                     }
                 } else {
                     const responseText = await resp.text();
@@ -361,3 +414,31 @@ async function sendAction(action, params) {
     }
 }
 
+// === Резолвер CONFIG (страховка от ReferenceError; см. шапку файла) ===
+// Ставит дефолтный {PHP_URL:'php/'} ТОЛЬКО если CONFIG нигде не задан — т.е.
+// страница загружена без js/config.js. Механизм: accessor-свойство на globalThis.
+//  * Браузер с config.js: top-level `const CONFIG` — lexical binding глобальной
+//    области; он скрывает window-свойство от всех скриптов страницы, а наш
+//    геттер никогда не вызывается — Боевой конфиг не трогается вообще.
+//  * Браузер без config.js: идентификатор CONFIG резолвится в window-свойство →
+//    геттер отдаёт fallback вместо ReferenceError.
+//  * Харнесс tests/test_sendaction_deadlock.mjs: задаёт globalThis.CONFIG ДО
+//    загрузки net.js — defineProperty бросает? Нет: свойство data-конфигурации,
+//    redefine разрешён, но мы сначала проверяем уже заданное значение и выходим,
+//    сохраняя тестовый конфиг нетронутым.
+(function ensureConfigFallback() {
+    if (typeof globalThis === 'undefined') return;
+    if ('CONFIG' in globalThis) return; // конфиг уже есть (браузер после присваивания или харнесс)
+    var fallback = { PHP_URL: 'php/' };
+    try {
+        Object.defineProperty(globalThis, 'CONFIG', {
+            configurable: true,
+            enumerable: true,
+            get: function () { return fallback; },
+            set: function (v) { // явное присваивание замещает дефолт навсегда
+                delete globalThis.CONFIG;
+                globalThis.CONFIG = v;
+            },
+        });
+    } catch (e) { /* окружение без прав на окно — тихо живём как раньше */ }
+})();

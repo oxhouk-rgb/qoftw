@@ -157,10 +157,11 @@ try {
                 }
                 // CC-блокировка способности — спрашиваем effects (не парсим NEGATIVES).
                 // special — самостоятельный глагол в словаре blocks (effects.php),
-                // блокируется теми же cc-эффектами, что ability.
-                $block = effects_blocks($state['players'][$player_id], $exec_verb);
-                if ($block['blocked']) {
-                    $result = ['success' => false, 'message' => 'Игрок оглушен'];
+                // блокируется теми же cc-эффектами, что ability. Сообщение об отказе
+                // берём из реестра эффектов (игровое, а не техническое).
+                $block_msg = effects_block_message($state['players'][$player_id], $exec_verb);
+                if ($block_msg !== '') {
+                    $result = ['success' => false, 'message' => $block_msg];
                     break;
                 }
                 if ($state['players'][$player_id]['STATUS'] === 'STUNNED') {

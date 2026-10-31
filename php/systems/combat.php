@@ -181,17 +181,20 @@ function action_validate($state, $player_id, $verb) {
     }
     // Глагол special — отдельный ключ словаря blocks, но механика у него
     // способность из реестра → дополнительно проверяем блокировку 'ability'.
+    // Отказ формулирует САМ модуль эффектов (effects_block_message): игрок
+    // получает игровое предупреждение («Вы обездвижены» для PARALYZED и т.п.),
+    // а не техническое «Действие заблокировано эффектом: NAME[n]».
     $check_verbs = [$verb];
     if ($verb === 'special') $check_verbs[] = 'ability';
     foreach ($check_verbs as $cv) {
-        $block = effects_blocks($player, $cv);
-        if ($block['blocked']) {
-            return ['success' => false, 'message' => 'Действие заблокировано эффектом: ' . $block['reason']];
+        $msg = effects_block_message($player, $cv);
+        if ($msg !== '') {
+            return ['success' => false, 'message' => $msg];
         }
     }
-    $block_all = effects_blocks($player, 'actions');
-    if ($block_all['blocked']) {
-        return ['success' => false, 'message' => 'Действие заблокировано эффектом: ' . $block_all['reason']];
+    $block_all_msg = effects_block_message($player, 'actions');
+    if ($block_all_msg !== '') {
+        return ['success' => false, 'message' => $block_all_msg];
     }
     if ((int)$player['ACTIONS'] <= 0) {
         return ['success' => false, 'message' => 'Нет очков действий'];

@@ -28,6 +28,8 @@
  *   effects_apply(&$state,$type,$id,$str) — наложить/продлить (max duration)
  *   effects_tick(&$state,$player_id)    — прогон NEGATIVES на начале хода
  *   effects_blocks($player,$verb)       — блокирует ли что-то из NEGATIVES?
+ *   effects_block_message($player,$verb)— ИГРОВОЕ сообщение для игрока, если
+ *              глагол заблокирован (из реестра: 'block_message'); '' если блокера нет
  *   effects_get_modifier($player,$stat) — суммарный модификатор стата
  *   effects_has($player,$name)          — есть ли эффект по имени
  */
@@ -54,13 +56,15 @@ function getEffectDefinitions() {
             'blocks' => ['move', 'attack', 'ability', 'special', 'actions'],
             'immediate' => true,           // STATUS='STUNNED' сразу при наложении
             'sets_status' => 'STUNNED',    // какой STATUS ставить/снимать
+            'block_message' => 'Игрок оглушен', // игровое сообщение (совпадает с текстом по STATUS)
             'description' => 'Оглушение: полная блокировка действий',
         ],
-        'FROZEN' => [
+        'PARALYZED' => [
             'kind' => 'cc',
             'blocks' => ['move'],
             'actions_penalty' => 1,        // −1 ACTION за ход
-            'description' => 'Заморозка: нельзя двигаться, −1 очко действий',
+            'block_message' => 'Вы обездвижены', // игровое сообщение при попытке заблокированного глагола
+            'description' => 'Обездвиживание: нельзя двигаться, −1 очко действий',
         ],
         // Modifiers: влияют на статы через effects_get_modifier
         'SLOWED' => [
@@ -113,6 +117,22 @@ function effects_blocks($player, $verb) {
         }
     }
     return ['blocked' => false, 'reason' => ''];
+}
+
+/**
+ * Игровое сообщение для игрока о том, ПОЧЕМУ глагол заблокирован.
+ * Текст владеет реестр эффектов (поле 'block_message') — эндпоинты не хардкодят
+ * имена статусов. Если у блокера сообщения нет, используется общее «Действие
+ * заблокировано эффектом: <NEGATIVES-строка>».
+ * @return string '' если блокировки глагола нет вообще
+ */
+function effects_block_message($player, $verb) {
+    $res = effects_blocks($player, $verb);
+    if (!$res['blocked']) return '';
+    $p = effects_parse($res['reason']);
+    $def = ($p ? getEffectDefinitions()[$p['name']] ?? null : null);
+    if ($def && !empty($def['block_message'])) return $def['block_message'];
+    return 'Действие заблокировано эффектом: ' . $res['reason'];
 }
 
 /**
