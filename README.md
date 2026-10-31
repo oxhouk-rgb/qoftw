@@ -17,6 +17,8 @@ React, Node.js, npm и сборка **не нужны** — это статич�
 
 ### Установка
 
+0. **Проверьте версию PHP: требуется 8.0+.** Движок использует именованные аргументы вызова функций — `array_merge(..., spawnCells: [...])` (`php/engine/world_builder.php`) и `world_save_cas($state, expected_version: $v)` (`php/join.php`). На PHP 7.4 это фатальная ошибка «Unknown named parameter» (в частности, при каждом подключении игрока через join.php).
+
 1. **Запустите Redis:**
 ```bash
 redis-server
@@ -76,7 +78,8 @@ Redis — хранилище **живого** боя. Изначальное с�
 | Характеристики **типов** объектов/ловушек/NPC | код: `systems/objects.php` → `getObjectTemplates()` | сборщик мира и будущие spawn-объекты способностей (`objects_spawn_entity()`) |
 | **Расстановка** этих типов по клеткам | секции `objects` / `traps` / `npcs` карт `data/<ID>.json` | `objects_layout_from_room()` (через ленивый `room_get()`) |
 | Стартовые клетки бойцов | секция `spawn_cells` карт спавн-комнат (`A1/A5/E1/E5`) | `room_initial_spawn_cell()` — тот же путь, что и респаун |
-| Характеристики/экипировка/способности бойцов | `data/initial_snapshot.json`, секция `players` | `world_builder_normalize_player()` |
+| Стартовые карточки бойцов | `data/initial_snapshot.json`, секция `players` — **изначально пуста** (`{"players": []}`, Этап 1) | `world_builder_read_snapshot()` → `world_build_initial()` (0 игроков = 0 персонажей) |
+| Карточка подключившегося игрока (uid/ник/stats/abilities/passives) | форма настройки `game.html` (сегодня), аккаунт из БД (в будущем) → POST `php/join.php` | `world_build_player_from_payload()` + CAS-запись `world_save_cas()` |
 
 Отсюда воспроизводимость: **перезапуск = перечитать эти три источника и записать мир заново** —
 разрушенные бочки снова целы, мина `INTACT`, турель на месте, игроки живы и стоят на стартовых
