@@ -268,13 +268,13 @@ NPC-урон (турель/мина) идёт по единой цепочке �
 - HP: 10 | ATK: 5 | RES: 3 | Shield: 5 | Actions: 2 | Range: 5
 - Способности: Fire Wave[3], Shock Granade[4], Napalm Granade[5]
 - Пассивки: Puncture
-- Союзник: PLAYER2
+- Союзник: нет (join.php ставит ALLY=NONE — FFA)
 
 ### PLAYER2 - FROST KNIGHT 🔵
 - HP: 8 | ATK: 4 | RES: 5 | Shield: 3 | Actions: 3 | Range: 3
 - Способности: Ice Shard[3], Frost Nova[2], Blizzard[5]
 - Пассивки: Armored, Splash, Puncture, Armor Crush (тестовая связка: ARMORED глушит собственный ARMOR_CRUSH — обе способности на этом персонаже попарно неактивны)
-- Союзник: PLAYER1
+- Союзник: нет (join.php ставит ALLY=NONE — FFA)
 
 ### PLAYER3 - SHADOW ROGUE 🟢
 - HP: 6 | ATK: 7 | RES: 2 | Shield: 0 | Actions: 3 | Range: 2
