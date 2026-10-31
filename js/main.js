@@ -16,7 +16,6 @@ const SETUP_STATS = [
     { field: 'SHIELD',       min: 1, max: 10, label: 'Щит' },
     { field: 'RESISTANCE',   min: 1, max: 9,  label: 'Сопротивление' },
     { field: 'ATTACK',       min: 1, max: 10, label: 'Атака' },
-    { field: 'DEFENCE',      min: 1, max: 10, label: 'Защита' },
     { field: 'RANGE',        min: 1, max: 10, label: 'Дальность' },
     { field: 'ACTIONS',      min: 1, max: 3,  label: 'Очки действий' },
 ];
