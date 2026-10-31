@@ -42,6 +42,22 @@ if (php_sapi_name() === 'cli' && in_array('--serve', $argv ?? [], true)) {
     exit(0);
 }
 
+// ★ Корень проекта — ЕДИНСТВЕННЫЙ источник путей для всех режимов запуска.
+// __DIR__/dirname(__FILE__) работают только при прямом запуске файла; при
+// загрузке кода через eval (отладочные обёртки) они указывают на каталог
+// вызывающего скрипта или не определены вовсе, и тест начинал искать
+// php/*.php в несуществующем '/php/' → все запросы давали ложные 404/500.
+if (!defined('BATTLE_PROJECT_ROOT')) {
+    $root = realpath(dirname(__FILE__) . '/..');
+    if ($root === false) { $root = realpath(__DIR__ . '/..'); }
+    if ($root === false || !is_dir($root . '/php')) {
+        fwrite(STDERR, "integration_join: не удалось определить корень проекта\n");
+        exit(2);
+    }
+    define('BATTLE_PROJECT_ROOT', $root);
+    unset($root);
+}
+
 function integration_serve_router(): void {
     // ★ В роли маршрутизатора весь код НИЖЕ этого блока (проверки check(),
     // эмуляция http_req через file_get_contents и т.д.) недопустим — иначе
@@ -49,7 +65,7 @@ function integration_serve_router(): void {
     // и deadlock'нул однопоточный php -S (клиент = сам сервер).
     $script = preg_replace('#[^a-z0-9_.-]#i', '', parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
     $script = ltrim($script, '/');
-    $target = __DIR__ . '/../php/' . $script . '.php';
+    $target = BATTLE_PROJECT_ROOT . '/php/' . $script . '.php';
     if ($script === '' || !is_file($target)) {
         http_response_code(404);
         header('Content-Type: application/json');
@@ -134,7 +150,7 @@ function inproc_req(string $script, ?string $body, array $get): array {
     global $INPROC_TMP;
     // ★ http_req() вызывается с путями вида '/php/init.php' — оставляем только имя файла.
     $script = basename($script);
-    $target = realpath(__DIR__ . '/../php/' . $script);
+    $target = realpath(BATTLE_PROJECT_ROOT . '/php/' . $script);
     if ($target === false) {
         return ['status' => 404, 'json' => null, 'raw' => 'нет файла ' . $script];
     }
@@ -165,7 +181,7 @@ function inproc_req(string $script, ?string $body, array $get): array {
         // error_reporting=0 глушит штатные warning'и CLI-SAPI (header() и пр.).
         ['php', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
         $descriptors, $pipes,
-        dirname(__DIR__),
+        BATTLE_PROJECT_ROOT,
         ['BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json', 'PATH' => getenv('PATH')]
     );
     if (!is_resource($proc)) {
@@ -228,13 +244,10 @@ function build_child_script(string $script, ?string $body, array $get, string $t
     // ★ КРИТИЧНО 1: внутри heredoc PHP НЕ вычисляет выражения — конкатенация
     // вида {$vRoot} . '/tests/...' попадает в шаблон как литерал и ломает require.
     // Все пути склеиваем ЗДЕСЬ и подставляем готовые литералы через var_export.
-    // ★ КРИТИЧНО 2: __DIR__ здесь = каталог ТЕСТА (tests/), а не корень проекта —
-    // корень это dirname(__DIR__). Ошибка давала '//tests/...' и фатал потомка.
-    $rootReal = realpath(dirname(__FILE__) . '/..');
-    if ($rootReal === false) {
-        $rootReal = is_dir('/workspace') ? '/workspace' : dirname(__FILE__);
-    }
-    $root    = $rootReal;
+    // ★ КРИТИЧНО 2: все пути — от BATTLE_PROJECT_ROOT (определяется в начале
+    // файла). Никаких __DIR__: при eval-загрузке теста он указывает не на tests/.
+    $rootReal = BATTLE_PROJECT_ROOT;
+    $root = $rootReal;
     $vStub   = var_export($rootReal . '/tests/fakeredis_stub.php', true);
     $vBoot   = var_export($rootReal . '/php/engine/bootstrap.php', true);
     $vStore  = var_export($tmpDir . '/store.json', true);
@@ -414,7 +427,7 @@ $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 1, 'один игрок = ровно один персонаж (одиночная сессия легальна)');
 
 // ─── 9. Одиночный игрок: боя нет, экран победы отключён ─────────────────────
-require_once __DIR__ . '/../php/engine/bootstrap.php';
+require_once BATTLE_PROJECT_ROOT . '/php/engine/bootstrap.php';
 $state = world_load();
 $res = engine_check_victory($state);
 check(($res['victory'] ?? true) === false,

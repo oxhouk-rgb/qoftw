@@ -173,7 +173,11 @@ try {
             $slot = null;
         }
     }
-    if ($nickname === '' || mb_strlen($nickname) > 24) {
+    // ★ Без ext-mbstring (php -n / минимальные Docker-образы) mb_* недоступен —
+    // деградируем к посимвольной длине: nickname фильтруется ниже регуляркой
+    // по буквам/цифрам, а 24 «байта» для UTF-ника лишь строже, чем 24 символа.
+    $nick_len = function_exists('mb_strlen') ? mb_strlen($nickname) : strlen($nickname);
+    if ($nickname === '' || $nick_len > 24) {
         $errors[] = 'nickname: требуется 1..24 символа';
     } elseif (!preg_match('/^[\p{L}\p{N}_\- ]+$/u', $nickname)) {
         $errors[] = 'nickname: допустимы буквы, цифры, "_", "-" и пробел';
@@ -216,8 +220,16 @@ try {
 
         // Идемпотентность повторного входа: боец этого uid уже в мире — ничего
         // не создаём второй раз (перезагрузка страницы ≠ второй персонаж).
+        // ★ Сравнение по UID аккаунта, а НЕ по 'PLAYER'.slot: при полном лобби
+        // чужой uid, пришедший на занятый слот с другим ником, обязан уйти с
+        // 409 (ниже), а не получить молчаливый rejoin чужого персонажа.
         $player_id = 'PLAYER' . $slot;
-        if (isset($state['players'][$player_id])) {
+        $existing_by_uid = null;
+        foreach ($state['players'] as $pid => $pdat) {
+            if ((string)($pdat['UID'] ?? '') === $uid_raw) { $existing_by_uid = $pid; break; }
+        }
+        if ($existing_by_uid !== null) {
+            $player_id = $existing_by_uid;
             closeRedis();
             ob_end_clean();
             header('Content-Type: application/json; charset=utf-8');
