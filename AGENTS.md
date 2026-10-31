@@ -31,7 +31,10 @@ game.html / index.html / diag.html  — страницы клиента (вхо�
 css/game.css                        — все стили клиента
 js/                                 — КЛИЕНТ, разбит на модули (см. §5): config, state, utils,
                                       grid, path, animation, render, input, net, main
-data/initial_snapshot.json          — ИЗНАЧАЛЬНЫЕ бойцы (временная подставка под аккаунт игрока)
+data/initial_snapshot.json          — ИЗНАЧАЛЬНЫЕ бойцы; с Этапа 1 секция players пуста ({"players": []}) —
+                                      персонажей «без владельца» в мире нет, боец создаётся при подключении
+php/join.php                        — ★ подключение игрока (Этап 1): POST-карточка (uid/nickname/stats/
+                                      abilities/passives) из формы game.html → спавн бойца (CAS), лимит 4 слота
 data/{A1,A5,B1,E1,E5}.json          — карты комнат (grid: 1=проходимо, 0=стена; exits/exit_rooms,
                                       spawn_cells, секции objects/traps/npcs — расстановка мира)
 php/config.php                      — Redis-коннект, ключи battle:*, JSON-хелперы, лог
@@ -88,14 +91,16 @@ ARCH.md / ABOUT.md / README.md      — справочники; читать В�
 ```
 js/config.js       — CONFIG (пути к php/, размеры сетки, CELL_SIZE)
 js/state.js        — глобальный state + effectiveMoveRange()
-js/net.js          — initGame, startPolling, poll, nextActionId, sendAction (retry-логика)
+js/net.js          — initGame, joinGame (POST join.php с карточкой персонажа), startPolling, poll,
+                     nextActionId, sendAction (retry-логика)
 js/grid.js         — buildGrid/rebuildGrid, findEntity, inCurrentRoom, purgeOutOfViewRoomEntities
 js/path.js         — isPathClear, isCellFreeForMove, hasLineOfSight (UX-проверки)
 js/input.js        — onCellClick, checkAvailableActions, showActionDialog, closeDialog
 js/render.js       — render, highlightPlayerZones, renderGrid, create*Entity, render*UI, checkVictory
 js/animation.js  — previewTurn, applyTurnClass, startMoveAnimation, animateMove
 js/utils.js        — parseXY, parseAbilityName/Range, showNotification
-js/main.js         — точка входа (initGame по выбору игрока)
+js/main.js         — точка входа: экран настройки персонажа (Этап 1) — validateCharacterForm /
+                     collectCharacterCard → joinGame; после подключения — initGame + цикл боя
 ```
 
 Правило: новый код клиента кладётся в соответствующий модуль; если файл растёт > ~800 строк —
