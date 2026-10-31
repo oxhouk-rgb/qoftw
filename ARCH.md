@@ -34,8 +34,8 @@
 │   игровой экран)               │   POST ├──────────────────────────────────┤      ┌──────────┐
 │ js/*.js    — poll/render/input │ ─────▶ │ join.php   — подключение игрока: │      │  Redis   │
 │ css/game.css — визуал/анимации │   POST │  карточка → спавн бойца (CAS)    │      │ battle:* │
-│ diag.html  — диагностика       │ ─────▶ │ action.php — валидация +         │      │ battle:* │
-└───────────────────────────────┘        │            роутинг move/attack/  │      └──────────┘
+│ diag.html  — диагностика       │ ─────▶ │ action.php — валидация +         │      └──────────┘
+└───────────────────────────────┘        │            роутинг move/attack/  │           ▲
         ▲                                │            ability (тонкий)      │           ▲
         │ GET poll.php?v=N&player=ID     ├──────────────────────────────────┤           ▲
         └─────────────────────────────── │ poll.php — long-poll + server    │           │
@@ -59,7 +59,8 @@
                                          │  JSON-хелперы (константы убраны)  │
                                          │ debug.php  — диагностика движка   │
                                          └──────────────────────────────────┘
-Данные (статические): data/initial_snapshot.json (ИЗНАЧАЛЬНЫЕ бойцы — подставка под аккаунт),
+Данные (статические): data/initial_snapshot.json (ИЗНАЧАЛЬНЫЕ бойцы — с Этапа 1 изначально пуст,
+                                     состав боя формируют подключения через php/join.php),
                                      data/A1|A5|B1|E1|E5.json (карты комнат 16×12: grid, двери,
                                      spawn_cells и расстановка objects/traps/npcs)
 Сборка изначального состояния: engine/world_builder.php (код-реестры + карты + снимок) →
@@ -72,9 +73,10 @@
 | Файл | Роль | Ключевые функции |
 |------|------|------------------|
 | `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`) | `getRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `setCorsHeaders()` |
-| `init.php` | Тонкий эндпоинт с ДВУМЯ режимами. **Обычный вход (идемпотентен):** проверяет готовность мира в Redis (`battle:version > 0`, иначе 503 с подсказкой `php tools/reset_world.php`), пропускает состав бойцов через `world_builder_player_errors()`, догружает недостающие карты комнат (`room_get`), пересчитывает `THREAT_ZONE` NPC и вызывает `world_save()` **только если реально что-то изменил** (иначе ложно разбудил бы все long-poll). **Явный перезапуск сессии** (`?reset=1` или POST `{"reset":true}`): `world_reset_session()` — сборка изначального мира + запись (см. `engine/world_reset.php`); при ошибках данных мир НЕ тронут, ответ 500 со списком ошибок. Отдаёт клиенту `rules` + реестры abilities/passives/effects/autonomous_objects | вызывается клиентом при выборе персонажа; `?reset=1` — вручную при перезапуске |
+| `init.php` | Тонкий эндпоинт с ДВУМЯ режимами. **Обычный вход (идемпотентен):** проверяет готовность мира в Redis (`battle:version > 0`, иначе 503 с подсказкой `php tools/reset_world.php`), пропускает состав бойцов через `world_builder_player_errors()`, догружает недостающие карты комнат (`room_get`), пересчитывает `THREAT_ZONE` NPC и вызывает `world_save()` **только если реально что-то изменил** (иначе ложно разбудил бы все long-poll). **Явный перезапуск сессии** (`?reset=1` или POST `{"reset":true}`): `world_reset_session()` — сборка изначального мира + запись (см. `engine/world_reset.php`); при ошибках данных мир НЕ тронут, ответ 500 со списком ошибок. Отдаёт клиенту `rules` + реестры abilities/passives/effects/autonomous_objects | вызывается клиентом после успешного `join.php` (шаг инициализации боя); `?reset=1` — вручную при перезапуске сессии (состав бойцов после reset — пустой, до подключений через join.php) |
 | `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`) | `require bootstrap.php` |
 | `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
+| `join.php` | ★ **Подключение игрока к бою (Этап 1: имитация данных с аккаунта)** (POST JSON — карточка персонажа: `uid`, `nickname`, `stats` (целые 1..10; ACTIONS 1..3), `abilities` (ровно 3 из реестра), `passives` (0..5 из реестра)). Сервер НЕ доверяет клиенту: мировая валидация карточки (`world_builder_player_errors` + `world_build_player_from_payload`) + собственные проверки; выделяет слот спавна (uid 1..4 → комнаты A1/A5/E1/E5); запись бойца — **CAS по версии мира** (`world_save_cas`, до 3 rebase-попыток против гонки с тиком poll.php/чужим подключением); повторный вход того же uid идемпотентен (`rejoin:true`, отдаётся существующий `player_id`); пятый игрок при занятых слотах → HTTP 409 (поверхностное решение известной проблемы отсутствия лобби). Ответ: `{success, player_id, slot, rejoin?}`. Альянсы: `ALLY='NONE'` (FFA) | вызывается формой настройки `game.html` (`js/net.js: joinGame()`) перед стартом polling |
 | `battle.php` | **Фасад обратной совместимости**: подключает `engine/rules.php` + `bootstrap.php`, содержит делегаты со всеми старыми именами (`processMove`, `processAttack`, `updateMovements`, `checkVictory`, …). Новый код здесь не писать | legacy-алиасы |
 | `debug.php` | Диагностика новой структуры: PHP/Redis, наличие engine/+systems/, `php -l` модулей (если CLI доступен), загрузка фасада, вывод реестров, состав мира в Redis (**только чтение**, живой бой не перезаписывает). Сброс мира здесь отсутствует сознательно — он выполняется через `tools/reset_world.php` / `init.php?reset=1` | standalone-страница |
 
@@ -114,9 +116,11 @@
 Функции объявлены в глобальном скоупе обычными `<script>` — без сборщиков и ES-модулей (табу стека не нарушается).
 
 - `CONFIG.PHP_URL = 'php/'`, сетка 16×12 (`GRID_WIDTH/HEIGHT`), `CELL_SIZE=40` (дублирует серверные константы — см. §7; скорости клиента в `CONFIG` нет — анимация движения строится на временах хода `MOVE_START/END_TIME` из snapshot).
-- Жизненный цикл: выбор PLAYER* → `initGame()` (fetch `init.php`) → `startPolling()` → бесконечный
+- Жизненный цикл: **экран настройки карточки в `game.html`** (uid, ник, stats 1..10, ровно 3
+  способности из реестра, 0–5 пассивов чекбоксами) → `joinGame(card)` (POST `join.php`, сервер
+  возвращает `player_id`) → `initGame(playerId)` (fetch `init.php`) → `startPolling()` → бесконечный
   цикл `poll()` (`poll.php?v=<version>&player=<ID>`, следующий запрос через 100 мс после ответа,
-  retry через 2 c при ошибке).
+  retry через 2 c при ошибке). До подключения игрока мир пуст для бойцов: 0 игроков = 0 персонажей.
 - Ввод: клик по клетке (`onCellClick`) открывает диалог действий (`showActionDialog`), кнопки
   способностей показываются по дальности; отправка — `sendAction()` (retry ×3 на 5xx/parse/network).
 - Рендер: `render(data)` — полный снимок → сетка, сущности, снаряды, UI (HP/щит/ACTIONS, таймер
@@ -143,8 +147,11 @@
   ★ Позиционные поля (`START/CUR/END_POSITION_XY`) при сборке **игнорируются**: стартовая клетка
   вычисляется кодом респауна (`room_initial_spawn_cell` → секция `spawn_cells` карты), иначе CUR и
   START разъезжаются и первое движение превращается в телепорт к серверной клетке.
-  Это ВРЕМЕННАЯ подставка под аккаунт игрока: когда появится экипировка, те же поля начнёт
-  присылать сам клиент (`world_build_player_from_payload()`).
+  ★★ **Этап 1: файл изначально пуст** (`{"players": []}`). Состав боя больше не берётся отсюда:
+  карточку персонажа (uid/ник/stats/abilities/passives) присылает клиент через `php/join.php`
+  (`world_build_player_from_payload()` + нормализация тем же `world_builder_normalize_player`).
+  Формат записей сохранён как резервный источник и пример схемы; в будущем карточку будет отдавать
+  аккаунт игрока из БД вместо ручной формы.
 - Расстановка объектов/ловушек/NPC больше не живёт в одном файле: записи `{ID, IMAGE, POSITION_XY,
   ...переопределения}` в секциях `objects` / `traps` / `npcs` карт комнат, а характеристики типа —
   код `systems/objects.php::getObjectTemplates()`. `ROOM_ID` сущности берётся из имени карты;
@@ -169,6 +176,7 @@ poll.php  │   (единственная точка сборки:     JSON-хе
 action.php│    require всех engine/*+systems/* +
           │    hook-регистрации)
 battle.php┘── (фасад legacy-имён)
+join.php —— bootstrap.php + world_builder.php (карточка → боец, запись через world_save_cas)
 debug.php —— свой путь диагностики (свой require bootstrap.php)
 
 ★ Перезапуск сессии (единственный путь, где мир СОБИРАЕТСЯ заново):
@@ -213,7 +221,10 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
   Не добавляйте прямые `require_once` систем в эндпоинты. Исключение осознанное: `init.php`
   дополнительно требует `engine/world_reset.php`, потому что перезапуск сессии — единственный
   HTTP-путь, где мир пересобирается; сам `world_reset.php` тянет `bootstrap.php`, поэтому
-  граф слушателей и правил от этого не меняется.
+  граф слушателей и правил от этого не меняется. Второе осознанное исключение: `join.php`
+  дополнительно требует `engine/world_builder.php` — сборка бойца из карточки идёт теми же
+  функциями (`world_build_player_from_payload` / `world_builder_normalize_player`), чтобы
+  валидация состава не жила во втором месте; прямых `require_once` систем (`systems/*`) у join.php нет.
 - Изначальное состояние мира собирается **только** `engine/world_builder.php` (чистая функция:
   ничего не пишет, state не мутирует) и записывается **только** `engine/world_reset.php`.
   CLI `tools/reset_world.php` обязан вызывать ровно те же функции — правила сборки запрещено
@@ -232,12 +243,15 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
 
 ## 4. Поток данных и протокол синхронизации
 
-1. **init**: клиент → `GET php/init.php` → проверка готовности мира в Redis + пересчёт
+1. **join**: клиент → `POST php/join.php` (карточка персонажа с экрана настройки `game.html`) →
+   серверная валидация + выделение слота спавна → `world_save_cas` (боец появляется в мире;
+   0 подключений = 0 бойцов) → ответ `{player_id}` → далее init.
+2. **init**: клиент → `GET php/init.php` → проверка готовности мира в Redis + пересчёт
    THREAT_ZONE (идемпотентно, живой бой НЕ обнуляется). Перезапуск сессии — только явно:
    `GET php/init.php?reset=1` или CLI `php tools/reset_world.php` → `world_reset_build()`
    (сборка изначального состояния) → `world_reset_write()` (flushDB, version=1, метка `seeded`).
    Причина правки: старый flushDB на каждом входе терял бой между вкладками.
-2. **poll-loop** (`poll.php?v=<clientVersion>&player=<ID>`): сервер держит соединение ≤25 с
+3. **poll-loop** (`poll.php?v=<clientVersion>&player=<ID>`): сервер держит соединение ≤25 с
    (`LONG_POLL_TIMEOUT`, `set_time_limit` снят), каждые 0.1 с: `world_load` → `turn_tick($state)`
    (**для любого запроса, даже без `?player=`** — иначе эффекты залипают) → движение по «виртуальным
    часам мира» с догоняющими тиками → death chain → projectiles → attack reset → npc statuses →
@@ -252,10 +266,10 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
    исторический контракт). `room/room_id/grid` — карта комнаты запросившего `?player=`
    (без параметра — legacy-карта `state['room']`), объекты/ловушки/NPC также отфильтрованы
    по её `ROOM_ID`. Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
-3. **action**: клиент → `POST php/action.php` (JSON) → предварительная валидация (жив/не CC/AP) →
+4. **action**: клиент → `POST php/action.php` (JSON) → предварительная валидация (жив/не CC/AP) →
    функция systems мутирует `$state` (by-ref) → `world_save` (incr version) →
    все зависшие poll мгновенно отдают новый мир. Ошибки — JSON 400, не fatal.
-4. **Контракты**: любой mutate состояния **обязан** закончиться сохранением через `world_save`
+5. **Контракты**: любой mutate состояния **обязан** закончиться сохранением через `world_save`
    (он сам делает incr версии; прямой `incr` в стороннем коде — антипаттерн). Забыли save →
    клиенты «зависнут на старом мире».
 
@@ -281,7 +295,10 @@ version/turn_time — int. ★ Изначального состояния ми�
 параллельны. Гонки гасятся короткими операциями и тем, что занятость клетки учитывает
 `END_POSITION_XY` движущихся игроков (`is_player_at_position`; мёртвые DEATH/DECAY/REMOVED клетку
 не занимают). `action.php` содержит retry-логику
-сохранения. Это осознанный минимализм стенда — при изменении модели записи не ухудшайте это.
+сохранения. Подключение игрока (`join.php`) идёт через `world_save_cas($state, $expected_version)`:
+CAS-запись по версии мира с перечитыванием (rebase) и повтором до 3 попыток — параллельный тик
+poll.php или чужое подключение не затираются. Это осознанный минимализм стенда — при изменении
+модели записи не ухудшайте это.
 
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
 
@@ -326,8 +343,9 @@ version/turn_time — int. ★ Изначального состояния ми�
   новые keyframes либо только filter/box-shadow, либо домножение transform на
   `scaleX(var(--turn-flip))`, иначе сломают отражение. На геймплей TURN пока не влияет.
 - **Смерть**: DEATH(1с) → DECAY(1с) → при LIFE>0 респавн (LIFE−1, полный reset HP/щита) через
-  `rooms_teleport(..., 'respawn')` в личную комнату `SPAWN_ROOM` (= комната старта бойца из
-  `data/initial_snapshot.json`: A1/A5/E1/E5) с подбором ближайшей свободной клетки вокруг `START_POSITION_XY`
+  `rooms_teleport(..., 'respawn')` в личную комнату `SPAWN_ROOM` (= спавн-комната, выделенная
+  `join.php` по слоту uid: A1/A5/E1/E5; historically — комната старта бойца из
+  `data/initial_snapshot.json`) с подбором ближайшей свободной клетки вокруг `START_POSITION_XY`
   (`room_find_spawn_cell`, защита от вставания на дверь/занятую клетку); если телепорт невозможен —
   legacy-страховка: строгий возврат на `START_POSITION_XY` внутри текущей комнаты. Иначе REMOVED
   (позиция не перестирается). Клиент убирает div из DOM только при
@@ -351,6 +369,7 @@ version/turn_time — int. ★ Изначального состояния ми�
 | `php/init.php` | GET `?reset=1` / POST `{"reset":true}` | — | то же + поле `world_reset` (сводка сборки); сайд-эффект: полный rebuild Redis из изначального состояния; ошибки данных → 500 и мир НЕ изменён |
 | `php/poll.php` | GET | `v` (int версия клиента), `player` (PLAYER*, опционально — тики идут в любом случае) | flat snapshot (§4.2, **без обёртки `data`**), опционально `timeout:true` |
 | `php/action.php` | POST | JSON `{action: move\|attack\|ability, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
+| `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/SHIELD/MAX_SHIELD/ATTACK/DEFENCE/RESISTANCE/RANGE: 1..10, ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot}` (`rejoin:true` при повторном входе того же uid); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира |
 | `php/debug.php` | GET | — | HTML-дамп диагностики движка и состава мира (не JSON!), только чтение |
 
 Все ответы — `application/json; charset=utf-8`, ошибки — `jsonError` (`{success:false,message}` +
@@ -376,7 +395,8 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 ## 8. Точки расширения (проверенные рецепты)
 
 - **Новая способность** → запись в `getAbilityDefinitions()` (`systems/abilities.php`) + строка
-  `ИМЯ[range]` в ABILITIES игрока в `data/initial_snapshot.json`. Новый механизм — отдельный `case` в
+  `ИМЯ[range]` в ABILITIES игрока (сегодня — выбор в селекторе формы настройки `game.html`,
+  приходит через `join.php`; резервно — `data/initial_snapshot.json`). Новый механизм — отдельный `case` в
   `applyAbility`; урон/эффекты — только через сервисы `combat_apply_damage` / `effects_apply`.
 - **Новый статус-эффект (DOT/CC/modifier)** → только реестр в `systems/effects.php`
   (`kind`, длительность, модификаторы); блокировки движения берутся из `effects_blocks()`,
@@ -394,8 +414,14 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 - **Новая комната** → `data/ROOM_ID.json` по образцу существующих (grid/exits/stairs/
   exit_positions/spawn_cells/objects/traps/npcs) + записи `exits` в картах соседних комнат; код
   править не нужно — карты подхватываются лениво (`room_get`), двери работают через exit-триггер,
-  спавн-кольцо строится из `exit_positions`. Если в комнате стартует боец — добавить его
-  `ROOM_ID`/`SPAWN_ROOM` в снимок и клетку в `spawn_cells`, затем пересобрать мир.
+  спавн-кольцо строится из `exit_positions`. Если в комнате стартует боец — его спавн выделяется
+  `join.php` (слот uid → комната + клетка из `spawn_cells`); для резервного снимка — добавить
+  `ROOM_ID`/`SPAWN_ROOM` в него и клетку в `spawn_cells`, затем пересобрать мир.
+- **Подключение игрока / карточка персонажа** → клиент собирает карточку (форма `game.html`) и
+  шлёт POST `join.php`; серверная половина валидации — там же (`JOIN_STATS_MIN/MAX`,
+  `JOIN_MAX_PLAYERS`). Расширение состава карточки (экипировка, классы) = синхронная правка
+  формы + `world_build_player_from_payload()`; переход на данные аккаунта из БД заменит только
+  источник карточки, контракт эндпоинта сохранится.
 - **Новое действие** → функция в нужной системе `systems/*` + case-роутинг + валидация в
   `action.php` + кнопка/отправка в `js/input.js`/`js/net.js`. Правила никогда не считать на клиенте.
 - Любая мутация состояния → сохранение через `world_save()` (incr версии делает сам).
