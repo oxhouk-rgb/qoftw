@@ -156,11 +156,14 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
 
     // Общая «БД» сценария: актуализируем dump перед запуском потомка.
-    // Пустой массив сериализуется как [] — приводим к объекту, иначе json_decode
-    // вернёт список и восстановление хранилища в потомке сорвётся (is_array).
+    // ★ Формат store.json — PHP-сериализация (serialize/unserialize), НЕ JSON:
+    // ключи Redis вида "battle:players" содержат двоеточие, а в JSON-объекте
+    // такие ключи при json_decode+ассоциативном доступе работают, НО пустой
+    // мир после flushdb кодировался как []/{} неоднозначно, и любое повреждение
+    // файла молча превращалось в «хранилище пусто» — тест терял состояние между
+    // запросами. serialize точно сохраняет и пустой массив, и все ключи как есть.
     $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
-    file_put_contents($INPROC_TMP . '/store.json',
-        json_encode((object) $GLOBALS['_redis_store']));
+    file_put_contents($INPROC_TMP . '/store.dat', serialize($GLOBALS['_redis_store']));
     file_put_contents($INPROC_TMP . '/body.json', $body ?? '');
     @unlink($INPROC_TMP . '/out.txt');
 
@@ -198,8 +201,9 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
     proc_close($proc);
 
-    // Потомок сохранил обновлённый мир в store.json (shutdown-хук) — забираем себе.
-    $newStore = json_decode((string)@file_get_contents($INPROC_TMP . '/store.json'), true);
+    // Потомок сохранил обновлённый мир в store.dat (shutdown-хук) — забираем себе.
+    $rawStore = @file_get_contents($INPROC_TMP . '/store.dat');
+    $newStore = ($rawStore === false || $rawStore === '') ? null : @unserialize($rawStore);
     if (is_array($newStore)) $GLOBALS['_redis_store'] = $newStore;
 
     $resp = (string)@file_get_contents($INPROC_TMP . '/out.txt');
@@ -250,8 +254,12 @@ function build_child_script(string $script, ?string $body, array $get, string $t
     $root = $rootReal;
     $vStub   = var_export($rootReal . '/tests/fakeredis_stub.php', true);
     $vBoot   = var_export($rootReal . '/php/engine/bootstrap.php', true);
-    $vStore  = var_export($tmpDir . '/store.json', true);
-    $vDumpSave = var_export('if (is_resource(\\$GLOBALS[\'_redis_fp\'] ?? null)) { fflush(\\$GLOBALS[\'_redis_fp\']); }', true);
+    $vStore  = var_export($tmpDir . '/store.dat', true);
+    // ★ Дамп хранилища — PHP-serialize (см. комментарий в inproc_req): JSON
+    // неоднозначно кодировал пустой мир и молча терял состояние между запросами.
+    $vDumpLoad = var_export(
+        '$d = @unserialize((string)@file_get_contents(' . var_export($tmpDir . '/store.dat', true) . '));'
+      . 'if (is_array($d)) $GLOBALS[\'_redis_store\'] = $d;', true);
     $vRoot   = var_export($root, true);
     $vTarget = var_export($target, true);
     $vTmp    = var_export($tmpDir, true);
@@ -266,8 +274,7 @@ function build_child_script(string $script, ?string $body, array $get, string $t
 \$GLOBALS['_redis_store'] = [];
 require {$vStub};   // класс Redis ДО config.php
 putenv('FAKEREDIS_SHARED=1');                     // общее in-memory хранилище процесса
-\$dump = json_decode((string)file_get_contents({$vStore}), true);
-if (is_array(\$dump)) \$GLOBALS['_redis_store'] = \$dump;
+{$vDumpLoad} // восстановление dump'а хранилища (serialize) перед запросом
 
 // Должно быть определено ДО require bootstrap.php: rules.php уважает
 // defined()-guard, а poll.php с LONG_POLL_TIMEOUT=0 отвечает сразу
