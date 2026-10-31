@@ -97,7 +97,7 @@
 
 | Файл | Роль | Ключевые элементы |
 |------|------|-------------------|
-| `effects.php` | **Реестр статус-эффектов** (STUNNED, BLEED и т.д.) с kind'ами `dot / cc / modifier`; длительность `[N]` ходов из NEGATIVES теперь реально тикает и снимается | `effects_apply/tick/blocks/get_modifier`; немедленная активация CC через слушатель `effect.applied`; никто больше не парсит NEGATIVES строками в сторонних файлах |
+| `effects.php` | **Реестр статус-эффектов** (STUNNED, DOT и т.д.) с kind'ами `dot / cc / modifier`; длительность `[N]` ходов из NEGATIVES теперь реально тикает и снимается | `effects_apply/tick/blocks/get_modifier`; немедленная активация CC через слушатель `effect.applied`; никто больше не парсит NEGATIVES строками в сторонних файлах |
 | `combat.php` | Единая цепочка урона: mitigate-query (сопротивление, ARMORED/ARMOR_CRUSH) → щит → HP → DEATH | `combat_apply_damage()` (PUNCTURE, остановка движения только при реальном уроне), `processAttack` на её базе (TURN по формуле, SPLASH через событие) |
 | `movement.php` | Движение: две фазы сохранены (предсказание на черновом копийстве `makeTrapPreviewState` vs серверное применение `movement_update`); блокировки/дальность — query-события | `movement_process_move`, слушатели `movement.query_block` (CC), `movement.query_distance` (SWIFT/SLOWED); «догоняющие тики» на виртуальных часах мира (`WORLD_MOVE_NOW`) |
 | `passives.php` | Реестр пассивок как слушатели шины (логика НЕ размазана по файлам) | ARMORED→`damage.query_mitigate`, THORNS→`damage.dealt`, SWIFT/SLOWED→`movement.query_distance`, REGENERATION→`turn.start`, SPLASH→`attack.resolved` (один проход по живым врагам); **ARMOR_CRUSH**→`damage.query_mitigate` атакующего: игнорирует всё сопротивление цели, но не действует, если у носителя есть ARMORED (`combat_should_pierce_resistance()`); переработанная ARMORED снижает входящий урон вдвое **только от атак с ARMOR_CRUSH** |
@@ -309,7 +309,7 @@ poll.php или чужое подключение не затираются. Э�
   `rooms_teleport(reason='exit')`), не заглушка. Поле `stairs` во всех картах пусто — вертикальных
   переходов нет.
 - **Ход**: каждые `TURN_DURATION=5` с ACTIONS → MAX_ACTIONS (без накопления), щит +1 к максимуму,
-  тик NEGATIVES (DoT BLEED/POISONED, счётчики), REGENERATION, восстановление ACTIONS NPC,
+  тик NEGATIVES (DoT DOT[N], счётчики), REGENERATION, восстановление ACTIONS NPC,
   перепроверка зон угрозы для стоящих игроков. Очерёдности нет — real-time со стоимостью 1 AP за
   любое действие. Кулдаунов у способностей нет.
 - **Движение**: только по прямой, ≤5 клеток (`MAX_MOVE_DISTANCE=5`, скорость `MOVE_SPEED=3 кл/с`;
@@ -334,7 +334,7 @@ poll.php или чужое подключение не затираются. Э�
   одинаковый по всем целям. Прерывание MOVING — только при реально нанесённом уроне
   (полностью поглощённый щитом движение не останавливает). Мёртвые (DEATH/DECAY) целями не являются.
 - **Способности**: 4 механизма `projectile`: `none` (instant/self_buff/ally_buff), `beam`, `line`,
-  `area(aoe)`; типы physical/fire/ice/poison; эффекты `ЭФФЕКТ[ходы]`: FROZEN, POISONED, BLEED,
+  `area(aoe)`; типов урона нет — урон просто урон; эффекты `ЭФФЕКТ[ходы]`: FROZEN, DOT,
   STUNNED, SLOWED, BLINDED. Снаряды-визуализации живут в `projectiles` с фазами cast→hit→done
   (1 сек каст + 2 сек полёт/попадание, чистит `turn_update_projectiles`; legacy-фасад
   `updateProjectiles` в battle.php делегирует ему).

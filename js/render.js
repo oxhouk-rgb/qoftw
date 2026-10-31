@@ -757,15 +757,14 @@ function renderProjectiles(data) {
         const el = document.createElement('div');
         el.className = 'projectile projectile-' + proj.status;
         
-        // Определяем тип по названию способности
-        if (proj.ability.includes('FIRE') || proj.ability.includes('NAPALM')) {
-            el.classList.add('type-fire');
-        } else if (proj.ability.includes('ICE') || proj.ability.includes('FROST') || proj.ability.includes('BLIZZARD')) {
-            el.classList.add('type-ice');
-        } else if (proj.ability.includes('POISON')) {
-            el.classList.add('type-poison');
+        // Внешний вид снаряда определяется МЕХАНИКОЙ (projectile), а не «типом
+        // урона» — типов урона в игре нет, урон — это просто урон.
+        if (proj.type === 'area') {
+            el.classList.add('kind-area');
+        } else if (proj.type === 'line') {
+            el.classList.add('kind-line');
         } else {
-            el.classList.add('type-physical');
+            el.classList.add('kind-beam');
         }
         
         cell.appendChild(el);

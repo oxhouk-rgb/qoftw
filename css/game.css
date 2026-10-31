@@ -518,10 +518,10 @@ body {
     100% { transform: scale(2); opacity: 0; }
 }
 
-.projectile.type-fire { background: radial-gradient(circle, #ff6600, #ff0000); }
-.projectile.type-ice { background: radial-gradient(circle, #66ccff, #0066ff); }
-.projectile.type-physical { background: radial-gradient(circle, #ffffff, #aaaaaa); }
-.projectile.type-poison { background: radial-gradient(circle, #66ff00, #006600); }
+/* Внешний вид снарядов — по механике (projectile), «типов урона» в игре нет */
+.projectile.kind-area  { background: radial-gradient(circle, #ff6600, #ff0000); }
+.projectile.kind-line  { background: radial-gradient(circle, #ffffff, #aaaaaa); }
+.projectile.kind-beam  { background: radial-gradient(circle, #66ccff, #0066ff); }
 
 /* Action dialog */
 #action-dialog {
