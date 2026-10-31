@@ -159,7 +159,9 @@ function showActionDialog(x, y) {
                        (abRange === 0 || lineOfSight);
         btnAb3.disabled = !canUse;
         btnAb3.style.display = '';
-        btnAb3.onclick = () => { previewTurn(x, y); sendAction('ability', { ability: abName, x: x, y: y }); closeDialog(); };
+        // Третья способность — глагол 'special' (серверный путь тот же, что ability,
+        // но статус SPECIAL → свой кадр анимации; см. php/action.php).
+        btnAb3.onclick = () => { previewTurn(x, y); sendAction('special', { ability: abName, x: x, y: y }); closeDialog(); };
     } else {
         btnAb3.style.display = 'none';
     }

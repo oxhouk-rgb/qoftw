@@ -153,7 +153,7 @@ function combat_on_damage_dealt(&$state, $payload) {
 }
 
 /**
- * ★ Единая точка валидации глагола перед любым действием (move/attack/ability).
+ * ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special).
  * Возвращает ['success'=>bool,'message'=>string]; при success=false эндпоинт
  * обязан отклонить действие (jsonError), состояние НЕ мутируется.
  *
@@ -179,9 +179,15 @@ function action_validate($state, $player_id, $verb) {
     if ($player['STATUS'] === 'STUNNED') {
         return ['success' => false, 'message' => 'Игрок оглушен'];
     }
-    $block = effects_blocks($player, $verb);
-    if ($block['blocked']) {
-        return ['success' => false, 'message' => 'Действие заблокировано эффектом: ' . $block['reason']];
+    // Глагол special — отдельный ключ словаря blocks, но механика у него
+    // способность из реестра → дополнительно проверяем блокировку 'ability'.
+    $check_verbs = [$verb];
+    if ($verb === 'special') $check_verbs[] = 'ability';
+    foreach ($check_verbs as $cv) {
+        $block = effects_blocks($player, $cv);
+        if ($block['blocked']) {
+            return ['success' => false, 'message' => 'Действие заблокировано эффектом: ' . $block['reason']];
+        }
     }
     $block_all = effects_blocks($player, 'actions');
     if ($block_all['blocked']) {

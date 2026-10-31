@@ -44,7 +44,7 @@ function updatePlayerEntity(entity, player) {
     
     // Обновляем класс статуса.
     // ВАЖНО: turn-left НЕ должен затираться — TURN приходит с сервера отдельно.
-    entity.classList.remove('status-idle', 'status-moving', 'status-attack', 'status-ability', 'status-death', 'status-decay', 'status-stunned');
+    entity.classList.remove('status-idle', 'status-moving', 'status-attack', 'status-ability', 'status-special', 'status-death', 'status-decay', 'status-stunned');
     entity.classList.add('status-' + player.STATUS.toLowerCase());
     // ★ Пока бойца ведёт локальная rAF-интерполяция, держим на спрайте класс
     // status-moving: он отключает CSS idle-bounce (animation:none), который
