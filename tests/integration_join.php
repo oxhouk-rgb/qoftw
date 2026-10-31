@@ -257,9 +257,13 @@ function build_child_script(string $script, ?string $body, array $get, string $t
     $vStore  = var_export($tmpDir . '/store.dat', true);
     // ★ Дамп хранилища — PHP-serialize (см. комментарий в inproc_req): JSON
     // неоднозначно кодировал пустой мир и молча терял состояние между запросами.
-    $vDumpLoad = var_export(
+    // ★ КРИТИЧНО 3: var_export() ВЕРНЁТ PHP-строку с кавычками — в шаблоне её
+    // нельзя оборачивать в одинарные кавычки ещё раз, иначе вместо кода в child.php
+    // попадёт строковый литерал ('...'), а следующий за ним идентификатор define
+    // даст «Parse error: unexpected identifier». Код дампа вставляем как есть.
+    $vDumpLoad =
         '$d = @unserialize((string)@file_get_contents(' . var_export($tmpDir . '/store.dat', true) . '));'
-      . 'if (is_array($d)) $GLOBALS[\'_redis_store\'] = $d;', true);
+      . "\nif (is_array(\$d)) \$GLOBALS['_redis_store'] = \$d;";
     $vRoot   = var_export($root, true);
     $vTarget = var_export($target, true);
     $vTmp    = var_export($tmpDir, true);
@@ -297,7 +301,11 @@ define('LONG_POLL_TIMEOUT', 0);
 // ★ use ({...литерал...}) синтаксически недопустим — путь подставляется телом
 // замыкания как литерал (var_export выше), а не списком use.
 register_shutdown_function(function () {
-    file_put_contents({$vStore}, json_encode((object)(\$GLOBALS['_redis_store'] ?? [])));
+    // ★ Формат дампа — PHP-serialize (см. комментарий в inproc_req): родитель
+    // читает store.dat через unserialize(). json_encode здесь молча ломал
+    // передачу состояния между запросами (ключи "battle:*", пустой мир [] vs {}),
+    // из-за чего потомки стартовали с ПУСТЫМ хранилищем и все проверки мира падали.
+    file_put_contents({$vStore}, serialize(\$GLOBALS['_redis_store'] ?? []));
 });
 
 // ── эмуляция HTTP-ответа для CLI (см. комментарий у build_child_script) ──
@@ -434,6 +442,16 @@ $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 1, 'один игрок = ровно один персонаж (одиночная сессия легальна)');
 
 // ─── 9. Одиночный игрок: боя нет, экран победы отключён ─────────────────────
+// ★ В роли КЛИЕНТА fake-Redis ещё не подключён (в in-process его грузит каждый
+// дочерний процесс, в HTTP-режиме — сервер). Без него bootstrap.php бросает
+// «Расширение PHP Redis не установлено» и тест обрывался с фаталом на последнем
+// шаге. Подключаем стаб ДО require; FAKEREDIS_SHARED=1 даёт то же общее
+// in-memory хранилище, что видят запросы сценария.
+require_once BATTLE_PROJECT_ROOT . '/tests/fakeredis_stub.php';
+putenv('FAKEREDIS_SHARED=1');
+$GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
+$prevLongPoll = defined('LONG_POLL_TIMEOUT') ? null : true;
+if ($prevLongPoll !== null) define('LONG_POLL_TIMEOUT', 0); // страховка на случай прямого require эндпоинтов
 require_once BATTLE_PROJECT_ROOT . '/php/engine/bootstrap.php';
 $state = world_load();
 $res = engine_check_victory($state);
