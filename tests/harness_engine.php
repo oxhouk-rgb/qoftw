@@ -457,11 +457,58 @@ function test_world_reset_restores_initial_state() {
     t_assert(is_array($tz) && count($tz) > 0, 'THREAT_ZONE турели пересчитана при сбросе (' . count($tz) . ' клеток)');
 }
 
+/**
+ * T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода
+ * отклоняется ЕЩЁ ДО применения движения штатной валидацией глагола, и игрок
+ * получает ИГРОВОЕ предупреждение «Вы обездвижены», а не технический текст с
+ * именем эффекта. Регрессия на баг: вместо понятного предупреждения игрок
+ * получал лишь отказ правила (HTTP 400) без внятного текста.
+ */
+function test_paralyzed_blocks_move_with_game_message() {
+    $state = harness_build_state();
+    $pid = 'PLAYER1';
+    // Чистый лист: эффект вешаем сами, статус/очки ставим в «можно действовать»
+    $state['players'][$pid]['STATUS'] = 'IDLE';
+    $state['players'][$pid]['ACTIONS'] = 3;
+    $state['players'][$pid']['NEGATIVES'] = [];
+
+    effects_apply($state, 'player', $pid, 'PARALYZED[2]');
+    t_assert(effects_has($state['players'][$pid], 'PARALYZED'), 'PARALYZED наложился через effects_apply');
+
+    $mv = effects_blocks($state['players'][$pid], 'move');
+    t_assert($mv['blocked'] === true, 'PARALYZED блокирует глагол move');
+    t_assert(strpos($mv['reason'], 'PARALYZED') === 0, 'причина блока — строка PARALYZED[n] из NEGATIVES');
+
+    $v = action_validate($state, $pid, 'move');
+    t_assert($v['success'] === false, 'ход обездвиженного игрока отклонён валидацией');
+    t_assert(($v['message'] ?? '') === 'Вы обездвижены',
+        'отказ содержит игровое сообщение «Вы обездвижены», а не текст ошибки эффекта');
+
+    // Тот же путь, что делает action.php для ходa: movement сам зовёт action_validate
+    $res = movement_process_move($state, $pid, 3, 3);
+    t_assert($res['success'] === false && ($res['message'] ?? '') === 'Вы обездвижены',
+        'movement_process_move вернул то же предупреждение (путь action.php → 400 + message)');
+
+    // Атака способностями НЕ заблокирована: PARALYZED блокирует только move
+    t_assert(effects_blocks($state['players'][$pid], 'attack')['blocked'] === false,
+        'PARALYZED не блокирует атаку');
+    t_assert(action_validate($state, $pid, 'attack')['success'] === true,
+        'атака обездвиженного игрока разрешена');
+
+    // Сообщение живёт в реестре эффектов — у STUNNED своего нет, остаётся общий текст
+    $stun_state = $state;
+    $stun_state['players'][$pid]['NEGATIVES'] = ['STUNNED[1]'];
+    $sv = action_validate($stun_state, $pid, 'move');
+    t_assert($sv['success'] === false && $sv['message'] === 'Игрок оглушен',
+        'STUNNED по-прежнему отвечает «Игрок оглушен» (по STATUS)');
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
 test_crossroom_targeting();
 test_world_reset_restores_initial_state();
+test_paralyzed_blocks_move_with_game_message();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);
