@@ -19,7 +19,7 @@
   ❌ WebSocket/SSE вместо long polling.
 - Состояние боя живёт **только в Redis** под префиксом `battle:`; файловое состояние отсутствует.
 - Живой клиент — `game.html` + `js/*.js` (модули config/state/utils/grid/path/animation/render/input/net/main) + `css/game.css`. Ранние relics песочничной
-  React-сборки удалены из репозитория; оставшийся в корне `index.html` — non-live leftover (не задействован в игре).
+  React-сборки удалены из репозитория.
 
 ## 2. Карта компонентов
 

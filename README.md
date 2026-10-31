@@ -29,7 +29,6 @@ redis-server
 /                       ← корень веб-сервера (docroot)
 ├── game.html           ← игровой клиент: экран настройки персонажа (Этап 1) + бой
 ├── diag.html           ← страница диагностики окружения
-├── index.html          ← relic ранней React-сборки (non-live, игрой не используется)
 ├── css/game.css        ← стили клиента (в т.ч. форма настройки персонажа)
 ├── js/                 ← клиент боевой системы, модули: config/state/utils/grid/
 │                             path/animation/render/input/net/main (форма карточки → join.php,

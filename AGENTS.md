@@ -28,8 +28,6 @@ grep -rn "function имя_функции" php/ js/   # найти функцию
 
 ```
 game.html / diag.html             — страницы клиента (вход: game.html)
-index.html                        — relic: leftover ранней React-сборки (<div id="root">), не используется
-                                    клиентом боевой системы
 css/game.css                        — все стили клиента
 js/                                 — КЛИЕНТ, разбит на модули (см. §5): config, state, utils,
                                       grid, path, animation, render, input, net, main
