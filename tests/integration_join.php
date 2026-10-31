@@ -354,7 +354,7 @@ function make_card($uid, $nick, $overrides = []) {
         'nickname' => $nick,
         'stats' => [
             'HITPOINTS' => 7, 'SHIELD' => 5, 'ATTACK' => 8,
-            'DEFENCE' => 4, 'RESISTANCE' => 3, 'RANGE' => 6, 'ACTIONS' => 2,
+            'RESISTANCE' => 3, 'RANGE' => 6, 'ACTIONS' => 2,
         ],
         'abilities' => ['FIRE WAVE', 'ICE SHARD', 'BACKSTAB'],
         'passives' => ['SWIFT', 'THORNS'],
@@ -492,14 +492,14 @@ $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['abilities' => ['FIRE WAVE', 'ICE SHARD']])));
 check($r['status'] === 400, '2 способности вместо 3 → 400');
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
-    ['stats' => ['HITPOINTS' => 7, 'SHIELD' => 5, 'ATTACK' => 8, 'DEFENCE' => 4,
+    ['stats' => ['HITPOINTS' => 7, 'SHIELD' => 5, 'ATTACK' => 8,
                  'RESISTANCE' => 3, 'RANGE' => 6, 'ACTIONS' => 4]])));
 check($r['status'] === 400, 'ACTIONS=4 вне диапазона 1..3 → 400');
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['passives' => ['FLYING']])));
 check($r['status'] === 400, 'несуществующая пассивка → 400');
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
-    ['stats' => ['HITPOINTS' => 11, 'SHIELD' => 5, 'ATTACK' => 8, 'DEFENCE' => 4,
+    ['stats' => ['HITPOINTS' => 11, 'SHIELD' => 5, 'ATTACK' => 8,
                  'RESISTANCE' => 3, 'RANGE' => 6, 'ACTIONS' => 2]])));
 check($r['status'] === 400, 'HITPOINTS=11 вне 1..10 → 400');
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO')));

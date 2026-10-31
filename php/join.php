@@ -15,7 +15,7 @@
  *     "uid":        "7",              // id аккаунта из БД (1..4 — слот спавна)
  *     "nickname":   "IVAN",           // ник из БД
  *     "stats":      { HITPOINTS/MAX_HITPOINTS, SHIELD/MAX_SHIELD, ATTACK,
- *                     DEFENCE, RESISTANCE, RANGE — целые 1..10;
+ *                     RESISTANCE, RANGE — целые 1..10;
  *                     ACTIONS (очки действий) — целое 1..3 },
  *     "abilities":  ["FIRE WAVE", "BLIZZARD", "BACKSTAB"],  // ровно 3 из реестра
  *     "passives":   ["SWIFT", "THORNS"]                      // от 0 до 5 из реестра
@@ -186,7 +186,7 @@ try {
     // ── 2) Характеристики: статы 1..10 + очки действий 1..3 ────────────────
     $stats_in = $input['stats'] ?? [];
     if (!is_array($stats_in)) $errors[] = 'stats: ожидается объект характеристик';
-    $stat_names = ['HITPOINTS', 'SHIELD', 'ATTACK', 'DEFENCE', 'RESISTANCE', 'RANGE'];
+    $stat_names = ['HITPOINTS', 'SHIELD', 'ATTACK', 'RESISTANCE', 'RANGE'];
     $stats = [];
     foreach ($stat_names as $f) {
         list($v, $e) = join_stat_value(is_array($stats_in) ? ($stats_in[$f] ?? null) : null, $f);
@@ -287,7 +287,6 @@ try {
             'SHIELD' => $stats['SHIELD'],
             'MAX_SHIELD' => $stats['SHIELD'],
             'ATTACK' => $stats['ATTACK'],
-            'DEFENCE' => $stats['DEFENCE'],
             'RESISTANCE' => $stats['RESISTANCE'],
             'RANGE' => $stats['RANGE'],
             'ACTIONS' => $stats['ACTIONS'],

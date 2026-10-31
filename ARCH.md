@@ -369,7 +369,7 @@ poll.php или чужое подключение не затираются. Э�
 | `php/init.php` | GET `?reset=1` / POST `{"reset":true}` | — | то же + поле `world_reset` (сводка сборки); сайд-эффект: полный rebuild Redis из изначального состояния; ошибки данных → 500 и мир НЕ изменён |
 | `php/poll.php` | GET | `v` (int версия клиента), `player` (PLAYER*, опционально — тики идут в любом случае) | flat snapshot (§4.2, **без обёртки `data`**), опционально `timeout:true` |
 | `php/action.php` | POST | JSON `{action: move\|attack\|ability\|special, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
-| `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/SHIELD/MAX_SHIELD/ATTACK/DEFENCE/RESISTANCE/RANGE: 1..10, ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot}` (`rejoin:true` при повторном входе того же uid); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира |
+| `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/SHIELD/MAX_SHIELD/ATTACK/RESISTANCE/RANGE: 1..10, ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot}` (`rejoin:true` при повторном входе того же uid); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира |
 | `php/debug.php` | GET | — | HTML-дамп диагностики движка и состава мира (не JSON!), только чтение |
 
 Все ответы — `application/json; charset=utf-8`, ошибки — `jsonError` (`{success:false,message}` +
