@@ -163,7 +163,8 @@ function inproc_req(string $script, ?string $body, array $get): array {
     // файла молча превращалось в «хранилище пусто» — тест терял состояние между
     // запросами. serialize точно сохраняет и пустой массив, и все ключи как есть.
     $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
-    file_put_contents($INPROC_TMP . '/store.dat', serialize($GLOBALS['_redis_store']));
+    $storeDump = serialize($GLOBALS['_redis_store']);
+    file_put_contents($INPROC_TMP . '/store.dat', $storeDump);
     file_put_contents($INPROC_TMP . '/body.json', $body ?? '');
     @unlink($INPROC_TMP . '/out.txt');
 
@@ -205,6 +206,7 @@ function inproc_req(string $script, ?string $body, array $get): array {
     $rawStore = @file_get_contents($INPROC_TMP . '/store.dat');
     $newStore = ($rawStore === false || $rawStore === '') ? null : @unserialize($rawStore);
     if (is_array($newStore)) $GLOBALS['_redis_store'] = $newStore;
+    else file_put_contents($INPROC_TMP . '/store.dat', $storeDump); // страховка: вернуть дамп родителя
 
     $resp = (string)@file_get_contents($INPROC_TMP . '/out.txt');
     $httpStatus = 0;
@@ -222,6 +224,27 @@ function inproc_req(string $script, ?string $body, array $get): array {
     }
 
     $json = json_decode($resp, true);
+    // ★ Диагностика отказов: в штатном JSON-контракте у отказа ВСЕГДА есть
+    // непустое поле message (jsonError). Если статус >=400, а сообщения нет —
+    // запрос даже не дошёл до эндпоинта (битый tmp-каталог, фатал до хука),
+    // и молчаливый «ok» рядом с таким артефактом маскировал бы баги транспорта.
+    if ($httpStatus >= 400 && trim((string)($json['message'] ?? '')) === '') {
+        return ['status' => 500, 'json' => is_array($json) ? $json : null,
+            'raw' => 'транспортная аномалия: HTTP ' . $httpStatus
+                . ' без JSON-сообщения эндпоинта; raw=' . substr($resp, 0, 300)
+                . '; stderr=' . substr($stderr, 0, 300)];
+    }
+    // ★ Обратная сторона той же диагностики: успешный ответ (2xx) обязан быть
+    // валидным JSON контракта. Пустой/непарсируемый вывод при 200 означал бы,
+    // что эндпоинт умер ДО записи ответа (например, shutdown-хук потомка не
+    // отработал из-за битого tmp-каталога) — раньше это молча превращалось в
+    // «rejoin:false / success:null» и FAIL'ы шагов 7-8 с плавающей природой.
+    if ($httpStatus < 300 && !is_array($json)) {
+        return ['status' => 500, 'json' => null,
+            'raw' => 'транспортная аномалия: HTTP ' . $httpStatus
+                . ' с непарсируемым телом; raw=' . substr($resp, 0, 300)
+                . '; stderr=' . substr($stderr, 0, 300)];
+    }
     return ['status' => $httpStatus, 'json' => is_array($json) ? $json : null, 'raw' => $resp];
 }
 
@@ -442,13 +465,8 @@ $ghost['UID'] = '9';
 $ghost['NICKNAME'] = 'GHOST';
 $overfull = $players;
 $overfull[] = $ghost;                         // 5 записей: лобби «переполнено»
-foreach (['battle:players' => $overfull] as $k => $v) {
-    $GLOBALS['_redis_store'][$k] = json_encode($v, JSON_UNESCAPED_UNICODE);
-}
-$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU'))); // uid=3 формален, но в мире нет носителя UID=3? есть PLAYER3…
-// ★ PLAYER3 с UID='3' присутствует — такой запрос даст rejoin, не отказ.
-// Убираем PLAYER3 из раздутого мира: тогда uid=3 свободен, а бойцов всё
-// равно 4 (PLAYER1,2,4,GHOST) → включается ровно ветка переполнения.
+// Убираем PLAYER3 с UID='3': тогда uid=3 свободен (не rejoin), а бойцов всё
+// равно 4 (PLAYER1,2,4,GHOST) → включается ровно ветка переполнения join.php.
 $four = array_values(array_filter($overfull, fn($p) => ($p['ID'] ?? '') !== 'PLAYER3'));
 $GLOBALS['_redis_store']['battle:players'] = json_encode($four, JSON_UNESCAPED_UNICODE);
 $r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU')));
@@ -461,7 +479,15 @@ check(count($players_after) === 4 && !array_filter($players_after,
 $GLOBALS['_redis_store'] = $overfull_backup;  // вернуть настоящий мир сценария
 
 // ─── 8. Серверная валидация битых карточек ──────────────────────────────────
-http_req('/php/init.php', json_encode(['reset' => true])); // новая сессия: 0 бойцов
+// Новая сессия: 0 бойцов. ★ Сброс делаем ПРЯМОЙ манипуляцией хранилищем
+// fake-Redis, а не POST init.php{reset:true}: у init.php контракт GET
+// (?reset=1), тело POST он игнорирует, и вместо сброса получался обычный
+// init — мир шага 7 оставался заполненным, и первый же битый запрос
+// (uid=1) давал бы ложный rejoin 200 вместо ожидаемого отказа 400.
+// Механика повторяет world_reset_write(): flushDB + боевые ключи пустого
+// каркаса + version=1. Фейк без battle:* ключей load читает как пустой мир
+// (json null → []), поэтому достаточно flushDB и версии.
+$GLOBALS['_redis_store'] = ['battle:version' => '1'];
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['abilities' => ['FIRE WAVE', 'ICE SHARD']])));
 check($r['status'] === 400, '2 способности вместо 3 → 400');
