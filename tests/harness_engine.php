@@ -470,7 +470,7 @@ function test_paralyzed_blocks_move_with_game_message() {
     // Чистый лист: эффект вешаем сами, статус/очки ставим в «можно действовать»
     $state['players'][$pid]['STATUS'] = 'IDLE';
     $state['players'][$pid]['ACTIONS'] = 3;
-    $state['players'][$pid']['NEGATIVES'] = [];
+    $state['players'][$pid]['NEGATIVES'] = array();
 
     effects_apply($state, 'player', $pid, 'PARALYZED[2]');
     t_assert(effects_has($state['players'][$pid], 'PARALYZED'), 'PARALYZED наложился через effects_apply');

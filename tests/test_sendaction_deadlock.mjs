@@ -20,6 +20,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let fetchCalls = [];       // список отправленных тел
 let failFirstN = 0;        // сколько первых fetch должны упасть (эмуляция ретрая)
+let http400Body = null;    // если не null — fetch отвечает HTTP 400 с этим телом
 let notifications = [];
 
 // Минимальные стабы окружения, которые использует net.js
@@ -34,6 +35,14 @@ globalThis.setTimeoutOrig = setTimeout;
 globalThis.fetch = async (url, opts) => {
     const body = JSON.parse(opts.body);
     fetchCalls.push(body);
+    if (http400Body !== null) {
+        // Штатный отказ сервера: HTTP 400 + JSON-тело {success:false, message}
+        return {
+            ok: false,
+            status: 400,
+            text: async () => http400Body,
+        };
+    }
     if (fetchCalls.length <= failFirstN) {
         throw new TypeError('Failed to fetch'); // сетевая ошибка → retry
     }
@@ -93,6 +102,44 @@ const [a, b] = await Promise.all([sendAction('move', { x: 1, y: 1 }), sendAction
 check('два параллельных sendAction оба завершены', a.success && b.success);
 check('оба запроса доставлены (по одному action_id каждый)',
     fetchCalls.length === 2 && fetchCalls[0].action_id !== fetchCalls[1].action_id);
+
+// Регрессия на баг «Ошибка сервера: 400» вместо игрового предупреждения.
+// Сервер отвечает штатным отказом: HTTP 400 + JSON {success:false, message:
+// 'Вы обездвижены'} (PARALYZED). Клиент обязан показать ИГРОВОЕ сообщение как
+// warning (внутриигровое уведомление), а не техническую ошибку со статусом.
+http400Body = JSON.stringify({ success: false, message: 'Вы обездвижены' });
+notifications = [];
+let paralyzedRes = null;
+try {
+    paralyzedRes = await withTimeout(sendAction('move', { x: 1, y: 1 }), 5000, 'sendAction#paralyzed');
+} catch (e) {}
+check('PARALYZED: показана «Вы обездвижены», а не «Ошибка сервера: 400»',
+    notifications.length === 1 &&
+    notifications[0][0] === 'warning' &&
+    notifications[0][1] === 'Вы обездвижены');
+check('PARALYZED: sendAction вернул структурированный отказ с сообщением сервера',
+    paralyzedRes && paralyzedRes.success === false && paralyzedRes.message === 'Вы обездвижены');
+
+// Тело без читаемого message → остаётся техническая «Ошибка сервера: <status>»
+http400Body = '<html>Bad Request</html>';
+notifications = [];
+try { await withTimeout(sendAction('move', { x: 1, y: 1 }), 5000, 'sendAction#nonjson'); } catch (e) {}
+check('нечитаемое тело 4xx → «Ошибка сервера: 400» (error)',
+    notifications.length === 1 &&
+    notifications[0][0] === 'error' &&
+    notifications[0][1] === 'Ошибка сервера: 400');
+
+http400Body = null;
+// Очередь после штатного отказа жива: следующее действие доходит до сервера
+fetchCalls = [];
+notifications = [];
+let afterRefusalOk = false;
+try {
+    const r3 = await withTimeout(sendAction('attack', { x: 3, y: 3 }), 5000, 'sendAction#after-refusal');
+    afterRefusalOk = r3 && r3.success === true;
+} catch (e) {}
+check('после отказа 400 очередь жива — следующее действие выполнено',
+    afterRefusalOk && fetchCalls.length === 1);
 
 let failed = 0;
 for (const [name, ok] of results) {

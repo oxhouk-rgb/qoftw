@@ -56,6 +56,7 @@ function getEffectDefinitions() {
             'blocks' => ['move', 'attack', 'ability', 'special', 'actions'],
             'immediate' => true,           // STATUS='STUNNED' сразу при наложении
             'sets_status' => 'STUNNED',    // какой STATUS ставить/снимать
+            'block_message' => 'Игрок оглушен', // игровое сообщение (совпадает с текстом по STATUS)
             'description' => 'Оглушение: полная блокировка действий',
         ],
         'PARALYZED' => [

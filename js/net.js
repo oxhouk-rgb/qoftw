@@ -299,8 +299,26 @@ async function sendAction(action, params) {
                         console.log(`Retry ${retryCount + 1}/${MAX_RETRIES}`);
                         retryNeeded = true;
                     } else {
-                        showNotification('Ошибка сервера: ' + resp.status, 'error');
-                        finalResult = { success: false, message: 'HTTP error' };
+                        // Штатные отказые ответы сервера (4xx, например «Вы обездвижены»
+                        // при PARALYZED) приходят с HTTP 400 и JSON-телом {success:false,
+                        // message}. Показываем сообщение сервера как внутриигровое
+                        // предупреждение, а не техническую ошибку. «Ошибка сервера» —
+                        // только для тел без читаемого message (и для 5xx после ретраев).
+                        let serverMessage = null;
+                        try {
+                            const errData = JSON.parse(errorText);
+                            if (errData && typeof errData.message === 'string' && errData.message) {
+                                serverMessage = errData.message;
+                            }
+                        } catch (e) { /* тело не JSON — покажем generic-ошибку */ }
+
+                        if (serverMessage) {
+                            showNotification(serverMessage, 'warning');
+                            finalResult = { success: false, message: serverMessage };
+                        } else {
+                            showNotification('Ошибка сервера: ' + resp.status, 'error');
+                            finalResult = { success: false, message: 'HTTP error' };
+                        }
                     }
                 } else {
                     const responseText = await resp.text();
