@@ -31,7 +31,10 @@ game.html / index.html / diag.html  — страницы клиента (вхо�
 css/game.css                        — все стили клиента
 js/                                 — КЛИЕНТ, разбит на модули (см. §5): config, state, utils,
                                       grid, path, animation, render, input, net, main
-data/initial_snapshot.json          — ИЗНАЧАЛЬНЫЕ бойцы (временная подставка под аккаунт игрока)
+data/initial_snapshot.json          — ИЗНАЧАЛЬНЫЕ бойцы; с Этапа 1 секция players пуста ({"players": []}) —
+                                      персонажей «без владельца» в мире нет, боец создаётся при подключении
+php/join.php                        — ★ подключение игрока (Этап 1): POST-карточка (uid/nickname/stats/
+                                      abilities/passives) из формы game.html → спавн бойца (CAS), лимит 4 слота
 data/{A1,A5,B1,E1,E5}.json          — карты комнат (grid: 1=проходимо, 0=стена; exits/exit_rooms,
                                       spawn_cells, секции objects/traps/npcs — расстановка мира)
 php/config.php                      — Redis-коннект, ключи battle:*, JSON-хелперы, лог
@@ -88,15 +91,36 @@ ARCH.md / ABOUT.md / README.md      — справочники; читать В�
 ```
 js/config.js       — CONFIG (пути к php/, размеры сетки, CELL_SIZE)
 js/state.js        — глобальный state + effectiveMoveRange()
-js/net.js          — initGame, startPolling, poll, nextActionId, sendAction (retry-логика)
+js/net.js          — initGame, joinGame (POST join.php с карточкой персонажа), startPolling, poll,
+                     nextActionId, sendAction (retry-логика)
 js/grid.js         — buildGrid/rebuildGrid, findEntity, inCurrentRoom, purgeOutOfViewRoomEntities
 js/path.js         — isPathClear, isCellFreeForMove, hasLineOfSight (UX-проверки)
 js/input.js        — onCellClick, checkAvailableActions, showActionDialog, closeDialog
 js/render.js       — render, highlightPlayerZones, renderGrid, create*Entity, render*UI, checkVictory
 js/animation.js  — previewTurn, applyTurnClass, startMoveAnimation, animateMove
 js/utils.js        — parseXY, parseAbilityName/Range, showNotification
-js/main.js         — точка входа (initGame по выбору игрока)
+js/main.js         — точка входа: экран настройки персонажа (Этап 1) — validateCharacterForm /
+                     collectCharacterCard → joinGame; после подключения — initGame + цикл боя
 ```
 
 Правило: новый код клиента кладётся в соответствующий модуль; если файл растёт > ~800 строк —
 выносить подобласть в отдельный модуль по той же схеме, а не наращивать гиганта.
+
+## 6. Порядок подключения игрока (Этап 1) — не путать с legacy-флоу
+
+Раньше: game.html выбирал одного из 4 заготовленных бойцов и сразу звал `init.php?player=PLAYERn`.
+Сейчас (актуальный флоу, см. `js/main.js` / `js/net.js`):
+
+1. Экран настройки `game.html`: `validateCharacterForm` → `collectCharacterCard` (uid 1..4,
+   никнейм, stats 1..10 / ACTIONS 1..3, ровно 3 способности, 0–5 пассивок).
+2. `joinGame(card)` → POST `php/join.php`: сервер валидирует карточку, выделяет слот спавна
+   (uid → комната A1/A5/E1/E5), пишет бойца через CAS (`world_save_cas`). Ответы:
+   400 — битая карточка; 409 — ник занят / все 4 слота заняты (пятый игрок не пройдёт);
+   повторный вход того же uid идемпотентен (`rejoin:true`).
+3. Только после успешного join: `initGame(player_id)` → `init.php` (без player-параметра
+   состава — состав уже в мире) → цикл `poll.php?v=N&player=PLAYER_ID`.
+
+Последствия для правок: состав боя в Redis меняется подключениями, а не снимком
+(`data/initial_snapshot.json` изначально пуст); после `reset` мира бойцов нет — игроков
+нужно подключать заново. Никаких персонажей «без владельца» создавать нельзя
+(0 игроков = 0 персонажей; NPC/объекты/ловушки — исключение, владельца не требуют).
