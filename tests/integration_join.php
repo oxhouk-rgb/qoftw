@@ -411,12 +411,54 @@ check(count($players) === 4, 'после rejoin бойцов всё ещё 4 (в
 $r = http_req('/php/join.php', json_encode(make_card(5, 'ECHO')));
 check($r['status'] === 400, 'uid=5 вне слотов 1..4 → 400 (защита статичной сессии)');
 
-// ─── 7. Полное лобби + попытка занять чужой слот другим uid → 409 ───────────
-$r = http_req('/php/join.php', json_encode(make_card(1, 'ZULU'))); // uid=1 занят ALPHA
-check($r['status'] === 409, 'слот занят другим ником → 409 (никнейм занят)');
+// ─── 7. Полное лобби: новый игрок не помещается → 409 ──────────────────────
+// ★ Слоты жёстко привязаны к uid (uid N → PLAYER N), поэтому «пришедший с
+// занятого uid» — это всегда rejoin того же аккаунта (шаг 5, 200), а не чужак.
+// Реальный сценарий переполнения: НОВЫЙ валидный uid (не занят, карточка
+// корректна) при полном лобби из 4 бойцов → сервер обязан отказать 409.
+$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU'))); // uid=3 занят Gamma_X → rejoin
+check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
+    'занятый uid с другим ником — rejoin владельца, а не конфликт (слоты привязаны к uid)');
+$r = http_req('/php/join.php', json_encode(make_card(4, 'ZULU'))); // uid=4 занят DELTA → rejoin
+check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
+    'повторный вход DELTA под новым именем — тоже идемпотентный rejoin');
+// ★ Примечание: любой uid вне 1..4 отсекается валидатором с 400 (шаг 6), а
+// uid внутри 1..4 при полном лобби — это чей-то rejoin. Поэтому штатный
+// «пятый игрок» в статичной сессии не проходит ни одной дверью. Страховочная
+// ветка CAS-цикла join.php («все спавн-места заняты» → 409) проверяется
+// напрямую: временно раздуваем мир fake-Redis до 5 бойцов и шлём валидную
+// карточку нового uid — сервер обязан отказать 409 и НЕ изменить мир.
+// Ключи правим только в хранилище фейка (внешний дамп battle:*), боевые
+// файлы не трогаются; version не инкрементируем — фиктивного 5-го бойца
+// join увидит через loadBattleState из внешнего дампа.
 $st = $GLOBALS['_redis_store'] ?? [];
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 4, 'неудачные попытки не добавили бойцов (всё ещё 4)');
+
+$overfull_backup = $st;                       // снимок мира для восстановления
+$ghost = $players[0];                         // копия реального бойца — валидная структура
+$ghost['ID'] = 'PLAYER9';
+$ghost['UID'] = '9';
+$ghost['NICKNAME'] = 'GHOST';
+$overfull = $players;
+$overfull[] = $ghost;                         // 5 записей: лобби «переполнено»
+foreach (['battle:players' => $overfull] as $k => $v) {
+    $GLOBALS['_redis_store'][$k] = json_encode($v, JSON_UNESCAPED_UNICODE);
+}
+$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU'))); // uid=3 формален, но в мире нет носителя UID=3? есть PLAYER3…
+// ★ PLAYER3 с UID='3' присутствует — такой запрос даст rejoin, не отказ.
+// Убираем PLAYER3 из раздутого мира: тогда uid=3 свободен, а бойцов всё
+// равно 4 (PLAYER1,2,4,GHOST) → включается ровно ветка переполнения.
+$four = array_values(array_filter($overfull, fn($p) => ($p['ID'] ?? '') !== 'PLAYER3'));
+$GLOBALS['_redis_store']['battle:players'] = json_encode($four, JSON_UNESCAPED_UNICODE);
+$r = http_req('/php/join.php', json_encode(make_card(3, 'ZULU')));
+check($r['status'] === 409, 'полное лобби (4 бойца) + новый uid → 409 «спавн-места заняты»');
+$st_after = $GLOBALS['_redis_store'] ?? [];
+$players_after = json_decode($st_after['battle:players'] ?? '[]', true);
+check(count($players_after) === 4 && !array_filter($players_after,
+    fn($p) => ($p['NICKNAME'] ?? '') === 'ZULU'),
+    'отказ по переполнению не создал бойца (ошибочный запрос не мутировал мир)');
+$GLOBALS['_redis_store'] = $overfull_backup;  // вернуть настоящий мир сценария
 
 // ─── 8. Серверная валидация битых карточек ──────────────────────────────────
 http_req('/php/init.php', json_encode(['reset' => true])); // новая сессия: 0 бойцов
