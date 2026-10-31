@@ -7,6 +7,11 @@
  *   attack  → systems/combat
  *   ability → systems/abilities (+ трата действия/статус/TURN здесь, т.к.
  *             это «обёртка глагола», а не боевая механика)
+ *   special → тот же путь, что ability, но статус SPECIAL: третья способность
+ *             в списке игрока — неизменная «специальная» способность персонажа
+ *             (в будущем выбор персонажей: 1 статичная special + 2 кастомных).
+ *             Механика у неё обычная способность из реестра, отличается только
+ *             проигрываемый клиентом кадр анимации.
  * Сохранение — всегда через world_save() (единая точка инкремента версии).
  */
 
@@ -67,7 +72,9 @@ try {
 
     // Единая валидация глагола ДО любой мутации состояния (dead/stunned/moving/no-actions).
     // Ловит баги рефакторинга: «мёртвый применяет действия», «залипший STUNNED».
-    $known_actions = ['move', 'attack', 'ability'];
+    // special — тот же исполняющий путь, что ability (см. case ниже), отличается
+    // только выставляемым статусом анимации (SPECIAL вместо ABILITY).
+    $known_actions = ['move', 'attack', 'ability', 'special'];
     if (!in_array($action, $known_actions, true)) {
         closeRedis();
         jsonError('Неизвестное действие: ' . $action, 400);
@@ -87,7 +94,10 @@ try {
     // а перечитываем свежее состояние, заново валидируем и применяем то же
     // действие поверх него (rebase) и повторяем сохранение. Идемпотентность по
     // action_id выше по-прежнему защищает от двойного применения ретраев.
-    $verb = $action; // move|attack|ability — тот же словарь, что у effects_blocks
+    // move|attack|ability|special — словарь effects_blocks знает только
+    // move/attack/ability, поэтому special валидируется/исполняется как ability
+    // (разница лишь в статусе анимации ниже).
+    $verb = ($action === 'special') ? 'ability' : $action;
     $result = ['success' => false, 'message' => 'Неизвестное действие'];
     $saved = false;
 
@@ -117,6 +127,9 @@ try {
                 break;
 
             case 'ability':
+            case 'special':
+                // Механика общая (реестр способностей + applyAbility); special —
+                // третья способность в списке игрока, её кадр анимации другой.
                 if (!$ability_name) {
                     $result = ['success' => false, 'message' => 'Не указана способность'];
                     break;
@@ -155,7 +168,8 @@ try {
 
                 if ($ability_result['success']) {
                     $state['players'][$player_id]['ACTIONS']--;
-                    $state['players'][$player_id]['STATUS'] = 'ABILITY';
+                    // Кадр анимации: special (третья способность) → SPECIAL, остальные → ABILITY.
+                    $state['players'][$player_id]['STATUS'] = ($action === 'special') ? 'SPECIAL' : 'ABILITY';
                     $state['players'][$player_id]['ATTACK_TIME'] = time();
                     // TURN — каноническая формула из engine/rules (только лево/право)
                     $ab_pos = parseXY($state['players'][$player_id]['CUR_POSITION_XY']);
