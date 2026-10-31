@@ -93,8 +93,8 @@
 | `renderLog` | :680 | Отрисовка лога |
 | `renderAbilities` | :701 | Отрисовка списка способностей |
 | `renderProjectiles` | :741 | Отрисовка снарядов |
-| `renderTimer` | :778 | Отрисовка таймера хода |
-| `checkVictory` | :788 | Проверка победы |
+| `renderTimer` | :777 | Отрисовка таймера хода |
+| `checkVictory` | :787 | Проверка победы |
 
 ### `js/state.js` (2 фукн.)
 
@@ -281,12 +281,12 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `getAbilityDefinitions` | :23 | Реестр всех способностей (формат прежний — см. шапку). |
-| `applyAbility` | :98 | Применить способность (валидация дальности из строки игрока "NAME[range]", |
-| `ability_hit_targets` | :161 |  |
-| `ability_apply_instant` | :178 |  |
-| `ability_apply_beam` | :223 |  |
-| `ability_apply_area` | :238 |  |
+| `getAbilityDefinitions` | :26 | Реестр всех способностей (формат прежний — см. шапку). |
+| `applyAbility` | :101 | Применить способность (валидация дальности из строки игрока "NAME[range]", |
+| `ability_hit_targets` | :164 |  |
+| `ability_apply_instant` | :181 |  |
+| `ability_apply_beam` | :226 |  |
+| `ability_apply_area` | :241 |  |
 
 ### `php/systems/combat.php` (6 фукн.)
 
@@ -303,16 +303,16 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `getEffectDefinitions` | :40 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
-| `effects_parse` | :78 |  |
-| `effects_format` | :86 |  |
-| `effects_has` | :91 |  |
-| `effects_blocks` | :105 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
-| `effects_get_modifier` | :122 | Суммарный модификатор стата от всех NEGATIVES носителя. |
-| `effects_apply` | :142 | Наложить эффект (или продлить до max длительности). Единственный способ |
-| `effects_on_applied` | :182 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
-| `effects_tick` | :202 | Прогон NEGATIVES носителя на начале хода (turn.start): |
-| `effects_register_hooks` | :273 |  |
+| `getEffectDefinitions` | :41 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
+| `effects_parse` | :76 |  |
+| `effects_format` | :84 |  |
+| `effects_has` | :89 |  |
+| `effects_blocks` | :103 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
+| `effects_get_modifier` | :120 | Суммарный модификатор стата от всех NEGATIVES носителя. |
+| `effects_apply` | :140 | Наложить эффект (или продлить до max длительности). Единственный способ |
+| `effects_on_applied` | :180 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
+| `effects_tick` | :200 | Прогон NEGATIVES носителя на начале хода (turn.start): |
+| `effects_register_hooks` | :271 |  |
 
 ### `php/systems/movement.php` (10 фукн.)
 
