@@ -14,8 +14,9 @@
  *   {
  *     "uid":        "7",              // id аккаунта из БД (1..4 — слот спавна)
  *     "nickname":   "IVAN",           // ник из БД
- *     "stats":      { HITPOINTS/MAX_HITPOINTS, SHIELD/MAX_SHIELD, ATTACK,
- *                     RESISTANCE, RANGE — целые 1..10;
+ *     "stats":      { HITPOINTS/MAX_HITPOINTS, ATTACK, RANGE — целые 1..10;
+ *                     SHIELD/MAX_SHIELD — целое 0..10 (0 = щита нет);
+ *                     RESISTANCE — целое 0..9 (0 = сопротивления нет);
  *                     ACTIONS (очки действий) — целое 1..3 },
  *     "abilities":  ["FIRE WAVE", "BLIZZARD", "BACKSTAB"],  // ровно 3 из реестра
  *     "passives":   ["SWIFT", "THORNS"]                      // от 0 до 5 из реестра
@@ -58,6 +59,13 @@ if (!defined('JOIN_MAX_PLAYERS')) {
 }
 if (!defined('JOIN_STATS_MIN'))  define('JOIN_STATS_MIN', 1);
 if (!defined('JOIN_STATS_MAX'))  define('JOIN_STATS_MAX', 10);
+// Щит и сопротивление: нижняя граница 0 — «отсутствие щита/сопротивления»
+// легально (бойец без щита получает весь урон в HP; RESISTANCE=0 не снижает
+// урон вовсе). Верхние границы: щит 10, сопротивление 9 (кэп формулы −90%).
+if (!defined('JOIN_SHIELD_MIN'))    define('JOIN_SHIELD_MIN', 0);
+if (!defined('JOIN_SHIELD_MAX'))    define('JOIN_SHIELD_MAX', 10);
+if (!defined('JOIN_RESISTANCE_MIN')) define('JOIN_RESISTANCE_MIN', 0);
+if (!defined('JOIN_RESISTANCE_MAX')) define('JOIN_RESISTANCE_MAX', 9);
 // Очки действий (ACTIONS/MAX_ACTIONS) — отдельный диапазон: 1..3 (решение по
 // форме настройки: поле обязательно, значения вне 1..3 отклоняются сервером).
 if (!defined('JOIN_ACTIONS_MIN')) define('JOIN_ACTIONS_MIN', 1);
@@ -183,13 +191,22 @@ try {
         $errors[] = 'nickname: допустимы буквы, цифры, "_", "-" и пробел';
     }
 
-    // ── 2) Характеристики: статы 1..10 + очки действий 1..3 ────────────────
+    // ── 2) Характеристики: статы 1..10 (щит/сопротивление — с нуля) + очки действий 1..3 ─
     $stats_in = $input['stats'] ?? [];
     if (!is_array($stats_in)) $errors[] = 'stats: ожидается объект характеристик';
-    $stat_names = ['HITPOINTS', 'SHIELD', 'ATTACK', 'RESISTANCE', 'RANGE'];
+    // Диапазоны по полям: обычные статы 1..10; SHIELD 0..10 и RESISTANCE 0..9 —
+    // ноль легален и означает «щита/сопротивления нет» (см. константы выше).
+    $stat_ranges = [
+        'HITPOINTS'  => [JOIN_STATS_MIN, JOIN_STATS_MAX],
+        'SHIELD'     => [JOIN_SHIELD_MIN, JOIN_SHIELD_MAX],
+        'ATTACK'     => [JOIN_STATS_MIN, JOIN_STATS_MAX],
+        'RESISTANCE' => [JOIN_RESISTANCE_MIN, JOIN_RESISTANCE_MAX],
+        'RANGE'      => [JOIN_STATS_MIN, JOIN_STATS_MAX],
+    ];
     $stats = [];
-    foreach ($stat_names as $f) {
-        list($v, $e) = join_stat_value(is_array($stats_in) ? ($stats_in[$f] ?? null) : null, $f);
+    foreach ($stat_ranges as $f => [$f_min, $f_max]) {
+        list($v, $e) = join_stat_value(is_array($stats_in) ? ($stats_in[$f] ?? null) : null,
+            $f, $f_min, $f_max);
         if ($e !== null) $errors[] = $e; else $stats[$f] = $v;
     }
     // Очки действий (ACTIONS/MAX_ACTIONS) — обязательное поле формы настройки
