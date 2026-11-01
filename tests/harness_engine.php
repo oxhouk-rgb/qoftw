@@ -503,12 +503,124 @@ function test_paralyzed_blocks_move_with_game_message() {
         'STUNNED по-прежнему отвечает «Игрок оглушен» (по STATUS)');
 }
 
+/**
+ * T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там,
+ * где исчез DOT»). Раньше effects_tick при тике dot на начале хода безусловно
+ * звал movement_interrupt() «до урона» — END_POSITION_XY схлопывался в
+ * промежуточную клетку, и спрайт замирал ровно в точке, где DOT тикнул/истёк,
+ * так и не доехав до финальной точки перемещения.
+ *
+ * Корректное поведение (единая цепочка урона, ARCH.md §5): прерывание MOVING
+ * принадлежит слушателю damage.dealt и происходит только при уроне, прошедшем
+ * сквозь щит (damage > 0). Поэтому:
+ *   a) истечение DOT[1] в пути — ход не трогается вообще;
+ *   b) тик DOT[3] при ПОЛНОСТЬЮ поглощающем щите — движение продолжается
+ *      (раньше именно этот случай молча останавливал спрайт: movement_interrupt
+ *      вызывался ДО combat_apply_damage, ещё не зная, сколько поглотит щит);
+ *   c) прямой удар с тем же уроном сквозь щит — движение ПРЕРЫВАЕТСЯ (этот
+ *      контракт не сломан правкой).
+ */
+function test_dot_expiry_does_not_stop_movement() {
+    echo "--- T7: DoT в пути не останавливает перемещение ---\n";
+    $state = harness_build_state();
+    $pid = 'PLAYER1';
+
+    // Чистый лист + длинный ход вдоль свободной строки y=1 комнаты A1
+    // (штатный путь action.php → movement_process_move: валидация, путь, занятость).
+    $p = &$state['players'][$pid];
+    $p['STATUS'] = 'IDLE';
+    $p['CUR_POSITION_XY'] = '1,1';
+    $p['START_POSITION_XY'] = '1,1';
+    $p['END_POSITION_XY'] = '1,1';
+    $p['NEGATIVES'] = [];
+    $p['ACTIONS'] = $p['MAX_ACTIONS'];
+    unset($p);
+    $res = movement_process_move($state, $pid, 4, 1);
+    t_assert(($res['success'] ?? false) === true, 'ход 1,1 → 4,1 принят (' . ($res['message'] ?? '?') . ')');
+    t_assert($state['players'][$pid]['STATUS'] === 'MOVING', 'STATUS=MOVING до начала тиков');
+    $end_xy = $state['players'][$pid]['END_POSITION_XY'];
+
+    // ── a) DOT[1] истекает ровно на начале хода, пока спрайт едет ──────────
+    $state['players'][$pid]['NEGATIVES'] = ['DOT[1]'];
+    turn_start($state); // emit('turn.start') → effects_tick: DOT тикает и снимается
+
+    $pa = $state['players'][$pid];
+    t_assert(!effects_has($pa, 'DOT'), 'DOT[1] истёк после тика хода');
+    t_assert($pa['STATUS'] === 'MOVING',
+        'истечение DOT в пути НЕ переводит игрока в IDLE (регрессия бага остановки)');
+    t_assert($pa['END_POSITION_XY'] === $end_xy,
+        'конечная клетка перемещения не схлопнута в промежуточную');
+    t_assert(isset($pa['MOVE_END_TIME']), 'ход MOVE_END_TIME сохранён — движение живо');
+
+    // Спрайт обязан доехать до финальной точки: прогоняем виртуальные часы
+    // шагами по 0.1с (тот же дискретный catch-up, что делает poll-цикл).
+    $deadline = $pa['MOVE_END_TIME'];
+    $t = microtime(true);
+    for ($i = 0; $i < 200 && $t <= $deadline + 0.2; $i++, $t += 0.1) {
+        movement_update_step($state, $t);
+    }
+    $pa = $state['players'][$pid];
+    t_assert($pa['STATUS'] === 'IDLE', 'по завершении анимации игрок стал IDLE');
+    t_assert($pa['CUR_POSITION_XY'] === $end_xy,
+        "игрок доехал до финальной точки ($end_xy), факт: {$pa['CUR_POSITION_XY']}");
+
+    // ── b) активный DOT[3] тикает в пути при щите, поглощающем весь урон ────
+    $p = &$state['players'][$pid];
+    $p['STATUS'] = 'IDLE';
+    $p['CUR_POSITION_XY'] = '1,1';
+    $p['START_POSITION_XY'] = '1,1';
+    $p['END_POSITION_XY'] = '1,1';
+    $p['SHIELD'] = 5;                  // ticks_damage DOT = 1 → щит глотает всё
+    $p['MAX_SHIELD'] = 5;
+    $p['HITPOINTS'] = max(5, $p['HITPOINTS']);
+    $p['NEGATIVES'] = ['DOT[3]'];
+    $hp_before = $p['HITPOINTS'];
+    unset($p);
+    $res = movement_process_move($state, $pid, 4, 1);
+    t_assert(($res['success'] ?? false) === true, 'второй ход принят');
+    $end_xy2 = $state['players'][$pid]['END_POSITION_XY'];
+
+    turn_start($state);               // тик DOT[3]: урон в щит, duration→2
+    $pb = $state['players'][$pid];
+    t_assert(effects_has($pb, 'DOT'), 'DOT[3] после тика продлился до DOT[2]');
+    t_assert((int)$pb['HITPOINTS'] === $hp_before,
+        "урон DoT полностью поглотил щит — HP не изменился ($hp_before → {$pb['HITPOINTS']})");
+    t_assert($pb['STATUS'] === 'MOVING' && $pb['END_POSITION_XY'] === $end_xy2,
+        'тик DoT, поглощённый щитом, НЕ прерывает плавное перемещение');
+
+    // ── c) контракт damage.dealt не сломан: прямой удар сквозь щит прерывает ─
+    $p = &$state['players'][$pid];
+    $p['SHIELD'] = 0;                 // удар обязан пройти сквозь щит по HP
+    $p['MAX_SHIELD'] = 0;
+    $hp_c = (int)$p['HITPOINTS'];
+    unset($p);
+    $pc = combat_apply_damage($state, 'player', $pid, 1, ['type' => 'test', 'id' => 'T7C']);
+    t_assert(($pc['dealt'] ?? 0) >= 1, 'прямой удар прошёл сквозь щит (dealt >= 1)');
+    t_assert((int)$state['players'][$pid]['HITPOINTS'] === $hp_c - 1,
+        'прямой удар снял 1 HP (щит нулевой)');
+    t_assert($state['players'][$pid]['STATUS'] !== 'MOVING',
+        'прямой урон по-прежнему прерывает движение (слушатель damage.dealt)');
+
+    // Восстановление чистоты сида для последующих прогонов внутри процесса.
+    $p = &$state['players'][$pid];
+    $p['STATUS'] = 'IDLE';
+    $p['CUR_POSITION_XY'] = '1,1';
+    $p['START_POSITION_XY'] = '1,1';
+    $p['END_POSITION_XY'] = '1,1';
+    unset($p['MOVE_START_TIME'], $p['MOVE_END_TIME'], $p['MOVE_DISTANCE']);
+    $p['NEGATIVES'] = [];
+    $p['SHIELD'] = 5;
+    $p['MAX_SHIELD'] = 5;
+    unset($p);
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
 test_crossroom_targeting();
 test_world_reset_restores_initial_state();
 test_paralyzed_blocks_move_with_game_message();
+test_dot_expiry_does_not_stop_movement();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);
