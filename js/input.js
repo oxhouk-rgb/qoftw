@@ -58,7 +58,10 @@ function checkAvailableActions(player, playerPos, x, y, distance) {
     const abilities = player.ABILITIES || [];
     for (let i = 0; i < abilities.length; i++) {
         const abRange = parseAbilityRange(abilities[i]);
-        if (distance <= abRange && (abRange === 0 || lineOfSight)) {
+        // distance > 0 (кроме range=0 — самоприменение): каст направленной
+        // способности в свою клетку сервер отклоняет; раньше такой запрос всё
+        // равно уходил на сервер — см. regression «зависание/100% CPU».
+        if ((distance > 0 || abRange === 0) && distance <= abRange && (abRange === 0 || lineOfSight)) {
             return true;
         }
     }
@@ -121,7 +124,8 @@ function showActionDialog(x, y) {
         const abName = parseAbilityName(abilities[0]);
         const abRange = parseAbilityRange(abilities[0]);
         btnAb1.textContent = '✨ ' + abName + ' [R:' + abRange + ']';
-        const canUse = distance <= abRange && 
+        const canUse = (distance > 0 || abRange === 0) &&
+                       distance <= abRange && 
                        player.STATUS !== 'MOVING' && 
                        player.ACTIONS > 0 &&
                        (abRange === 0 || lineOfSight); // Для range=0 (самоприменение) не нужна линия видимости
@@ -137,7 +141,8 @@ function showActionDialog(x, y) {
         const abName = parseAbilityName(abilities[1]);
         const abRange = parseAbilityRange(abilities[1]);
         btnAb2.textContent = '✨ ' + abName + ' [R:' + abRange + ']';
-        const canUse = distance <= abRange && 
+        const canUse = (distance > 0 || abRange === 0) &&
+                       distance <= abRange && 
                        player.STATUS !== 'MOVING' && 
                        player.ACTIONS > 0 &&
                        (abRange === 0 || lineOfSight);
@@ -153,7 +158,8 @@ function showActionDialog(x, y) {
         const abName = parseAbilityName(abilities[2]);
         const abRange = parseAbilityRange(abilities[2]);
         btnAb3.textContent = '✨ ' + abName + ' [R:' + abRange + ']';
-        const canUse = distance <= abRange && 
+        const canUse = (distance > 0 || abRange === 0) &&
+                       distance <= abRange && 
                        player.STATUS !== 'MOVING' && 
                        player.ACTIONS > 0 &&
                        (abRange === 0 || lineOfSight);

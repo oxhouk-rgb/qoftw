@@ -132,6 +132,18 @@ function find_target_at_position($state, $x, $y, $caster_id) {
  * на непроходимой клетке (стена/объект) — как раньше в abilities.php.
  * ★ Комнатная изоляция: сканируются только сущности комнаты кастера —
  * выход через дверь не «видит» цели в соседней комнате.
+ *
+ * ★★ REGRESSION (зависание игры / 100% CPU / очередь «повисших» запросов):
+ * раньше цикл обрывался только условием isValidPosition(). При (dx,dy)==(0,0)
+ * (каст beam/line-способности В СВОЮ КЛЕТКУ — directionStep совпадающих точек)
+ * координаты не менялись, клетка оставалась проходимой — бесконечный цикл,
+ * пересобиравший all_entities()/is_cell_passable() на каждой итерации. Воркер
+ * PHP съедал весь CPU, параллельные long-poll/action запросы выстраивались в
+ * очередь и «зависали», а после освобождения процесса залпом вываливались
+ * уведомлениями о действиях, предпринятых во время зависания.
+ * Теперь: (1) нулевой шаг = выстрела нет → пустой список целей; (2) жёсткий
+ * потолок длины трассы по диагонали сетки — любая непредвиденная ситуация
+ * завершает цикл за конечное число шагов.
  */
 function get_targets_on_line($state, $x1, $y1, $x2, $y2, $caster_id) {
     $targets = [];
@@ -139,16 +151,19 @@ function get_targets_on_line($state, $x1, $y1, $x2, $y2, $caster_id) {
     if (!$caster) return $targets;
 
     list($dx, $dy) = directionStep($x1, $y1, $x2, $y2);
+    if ($dx === 0 && $dy === 0) return $targets; // старт == конец: луча нет
+
     $cx = $x1 + $dx;
     $cy = $y1 + $dy;
+    $max_steps = GRID_WIDTH + GRID_HEIGHT; // конечность цикла: потолок длины трассы
 
-    while (isValidPosition($cx, $cy)) {
+    for ($step = 0; $step < $max_steps && isValidPosition($cx, $cy); $step++) {
         foreach (all_entities($state, $caster['room']) as $e) {
             if ($e['x'] === $cx && $e['y'] === $cy && hostile_to($e, $caster_id, $caster['ally'])) {
                 $targets[] = $e;
             }
         }
-        if (!is_cell_passable($state, $cx, $cy)) break; // препятствие останавливает луч
+        if (!is_cell_passable($state, $cx, $cy, $caster['room'])) break; // препятствие останавливает луч
         $cx += $dx;
         $cy += $dy;
     }

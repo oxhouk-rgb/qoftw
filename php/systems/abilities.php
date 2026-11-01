@@ -125,6 +125,16 @@ function applyAbility(&$state, $caster_id, $ability_name, $target_x, $target_y) 
         return ['success' => false, 'message' => 'Цель слишком далеко'];
     }
 
+    // ★ REGRESSION (зависание/перегрузка CPU): каст направленной способности в
+    // СОБСТВЕННУЮ клетку раньше доходил до get_targets_on_line() с нулевым
+    // шагом луча. Теперь это отклоняется на входе — как и в combat_process_attack
+    // («Нельзя атаковать свою клетку»). Само-баффы (FORTIFY/WAR CRY, range=0)
+    // идут по ветке 'none' и не затрагиваются.
+    if ($distance === 0 && $ability['projectile'] !== 'none' &&
+        !isset($ability['self_buff']) && !isset($ability['ally_buff'])) {
+        return ['success' => false, 'message' => 'Нельзя применить способность на свою клетку'];
+    }
+
     $result = ['success' => true, 'projectiles' => [], 'hits' => [], 'message' => ''];
 
     switch ($ability['projectile']) {
