@@ -13,8 +13,8 @@
 
 const SETUP_STATS = [
     { field: 'HITPOINTS',    min: 1, max: 10, label: 'Здоровье' },
-    { field: 'SHIELD',       min: 1, max: 10, label: 'Щит' },
-    { field: 'RESISTANCE',   min: 1, max: 9,  label: 'Сопротивление' },
+    { field: 'SHIELD',       min: 0, max: 10, label: 'Щит' },          // 0 = щита нет
+    { field: 'RESISTANCE',   min: 0, max: 9,  label: 'Сопротивление' }, // 0 = сопротивления нет
     { field: 'ATTACK',       min: 1, max: 10, label: 'Атака' },
     { field: 'RANGE',        min: 1, max: 10, label: 'Дальность' },
     { field: 'ACTIONS',      min: 1, max: 3,  label: 'Очки действий' },
