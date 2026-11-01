@@ -502,6 +502,22 @@ $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['stats' => ['HITPOINTS' => 11, 'SHIELD' => 5, 'ATTACK' => 8,
                  'RESISTANCE' => 3, 'RANGE' => 6, 'ACTIONS' => 2]])));
 check($r['status'] === 400, 'HITPOINTS=11 вне 1..10 → 400');
+// Минимально допустимые 0 для щита и сопротивления (0 = отсутствие) — легальны.
+$r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
+    ['stats' => ['HITPOINTS' => 7, 'SHIELD' => 0, 'ATTACK' => 8,
+                 'RESISTANCE' => 0, 'RANGE' => 6, 'ACTIONS' => 2]])));
+check($r['status'] === 200 && !empty($r['json']['success']),
+    'SHIELD=0 и RESISTANCE=0 (минимум диапазона) → 200, отсутствие щита/сопротивления легально');
+$GLOBALS['_redis_store'] = ['battle:version' => '1']; // очистить после успешного join
+$r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
+    ['stats' => ['HITPOINTS' => 7, 'SHIELD' => -1, 'ATTACK' => 8,
+                 'RESISTANCE' => 0, 'RANGE' => 6, 'ACTIONS' => 2]])));
+check($r['status'] === 400, 'SHIELD=-1 ниже минимума 0 → 400');
+$r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
+    ['stats' => ['HITPOINTS' => 7, 'SHIELD' => 0, 'ATTACK' => 8,
+                 'RESISTANCE' => 10, 'RANGE' => 6, 'ACTIONS' => 2]])));
+check($r['status'] === 400, 'RESISTANCE=10 вне диапазона 0..9 → 400');
+$GLOBALS['_redis_store'] = ['battle:version' => '1']; // вернуть пустой мир перед финальным проверочным join
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO')));
 check($r['status'] === 200 && !empty($r['json']['success']),
     'валидная карточка после серии отказов проходит (битые запросы не тронули мир)');
