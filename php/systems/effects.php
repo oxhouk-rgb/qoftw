@@ -234,11 +234,14 @@ function effects_tick(&$state, $player_id) {
 
         if ($kind === 'dot' && !empty($def['ticks_damage'])) {
             // Единая цепочка урона (щит→HP→death) — systems/combat.php.
-            // Движение прерываем ЯВНО ДО урона, чтобы cc-эффекты этого же тика
-            // (ниже) застали STATUS != MOVING и сразу выставили STUNNED.
-            if ($player['STATUS'] === 'MOVING') {
-                movement_interrupt($state, $player_id);
-            }
+            // ★ Движение НЕ прерываем явно: DoT — постепенный урон, а не удар.
+            // Единственная точка прерывания MOVING — слушатель damage.dealt
+            // (combat_on_damage_dealt), который останавливает спрайт только при
+            // уроне, прошедшем сквозь щит (damage > 0). Раньше здесь стоял
+            // безусловный movement_interrupt() «до урона» — из-за этого тик/
+            // истечение DOT[1] на начале хода мгновенно гасил END_POSITION_XY
+            // в промежуточную клетку, и игрок останавливался ровно там, где
+            // эффект исчез, так и не доехав до финальной точки перемещения.
             combat_apply_damage($state, 'player', $player_id, $def['ticks_damage'],
                                 ['type' => 'effect', 'id' => $p['name']]);
         }

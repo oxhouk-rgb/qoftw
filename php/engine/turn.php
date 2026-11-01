@@ -60,6 +60,12 @@ function turn_start(&$state) {
  * когда спрайт едет; movement_update_step ниже по часам корректно восстановит
  * STUNNED из ещё активных NEGATIVES на финале движения (историческое
  * поведение updateMovements сохранено).
+ *
+ * Тик DoT НЕ прерывает движение сам по себе: effects_tick отдаёт урон только
+ * через combat_apply_damage, а спрайт останавливает единый слушатель
+ * damage.dealt — и только при уроне, прошедшем сквозь щит (см. ARCH.md §5).
+ * Простое истечение DOT в пути не должно гасить перемещение на промежуточной
+ * клетке (регрессия T7 в tests/harness_engine.php).
  */
 function turn_effects_tick(&$state, $payload) {
     foreach ($state['players'] as $pid => $player) {

@@ -40,35 +40,35 @@
 |---|---|---|
 | `onCellClick` | :7 | Обработчик клика по клетке |
 | `checkAvailableActions` | :43 | Проверка наличия доступных действий для клетки |
-| `showActionDialog` | :72 | Показать диалог действий для клетки |
-| `closeDialog` | :184 | Закрыть диалог |
+| `showActionDialog` | :75 | Показать диалог действий для клетки |
+| `closeDialog` | :190 | Закрыть диалог |
 
 ### `js/main.js` (10 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `setupStatus` | :26 |  |
-| `fetchRegistries` | :37 | Шаг 1: подтянуть реестры способностей/пассивок из init.php (идемпотентный |
-| `buildAbilitySelector` | :59 |  |
-| `updateAbilityCount` | :73 |  |
-| `selectedAbilities` | :80 |  |
-| `buildPassivesList` | :85 |  |
-| `selectedPassives` | :102 |  |
-| `updatePassiveCount` | :107 |  |
-| `validateCharacterForm` | :119 | Клиентская половина правил join.php: проверка ДО отправки (быстрый фидбек), |
-| `collectCharacterCard` | :150 | Собрать карточку персонажа — контракт php/join.php (в будущем её присылает |
+| `setupStatus` | :25 |  |
+| `fetchRegistries` | :36 | Шаг 1: подтянуть реестры способностей/пассивок из init.php (идемпотентный |
+| `buildAbilitySelector` | :58 |  |
+| `updateAbilityCount` | :72 |  |
+| `selectedAbilities` | :79 |  |
+| `buildPassivesList` | :84 |  |
+| `selectedPassives` | :101 |  |
+| `updatePassiveCount` | :106 |  |
+| `validateCharacterForm` | :118 | Клиентская половина правил join.php: проверка ДО отправки (быстрый фидбек), |
+| `collectCharacterCard` | :149 | Собрать карточку персонажа — контракт php/join.php (в будущем её присылает |
 
 ### `js/net.js` (7 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `joinGame` | :12 | Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js): |
-| `initGame` | :49 | Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт polling. |
-| `syncClock` | :130 | ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения). |
-| `startPolling` | :156 | Запуск цикла long polling |
-| `poll` | :165 | Один запрос long polling |
-| `nextActionId` | :218 |  |
-| `sendAction` | :257 | Отправить действие на сервер с retry логикой. |
+| `joinGame` | :31 | Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js): |
+| `initGame` | :68 | Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт polling. |
+| `syncClock` | :149 | ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения). |
+| `startPolling` | :175 | Запуск цикла long polling |
+| `poll` | :184 | Один запрос long polling |
+| `nextActionId` | :237 |  |
+| `sendAction` | :276 | Отправить действие на сервер с retry логикой. |
 
 ### `js/path.js` (3 фукн.)
 
@@ -225,14 +225,14 @@
 | Функция | Строка | Назначение |
 |---|---|---|
 | `turn_start` | :26 | Начало хода: восстановление ACTIONS/щита + эмит turn.start. |
-| `turn_effects_tick` | :64 | Слушатель turn.start (priority 5): прогон эффектов всех живых игроков. |
-| `turn_sync_status_after_effect` | :84 | ★ Инвариант «статус = NEGATIVES» (слушатель effect.applied, priority 10 — |
-| `turn_tick` | :113 | Один серверный тик: все анимационно-временные обновления + ход мира. |
-| `turn_check_advance` | :186 | Проверить/вызвать начало нового хода (если прошло TURN_DURATION). |
-| `turn_update_death_animations` | :215 | ★ Фазы DEATH/DECAY: переход на респаун в Личную SPAWN_ROOM. |
-| `turn_update_projectiles` | :265 |  |
-| `turn_reset_attack_status` | :287 |  |
-| `turn_register_hooks` | :302 |  |
+| `turn_effects_tick` | :70 | Слушатель turn.start (priority 5): прогон эффектов всех живых игроков. |
+| `turn_sync_status_after_effect` | :90 | ★ Инвариант «статус = NEGATIVES» (слушатель effect.applied, priority 10 — |
+| `turn_tick` | :119 | Один серверный тик: все анимационно-временные обновления + ход мира. |
+| `turn_check_advance` | :192 | Проверить/вызвать начало нового хода (если прошло TURN_DURATION). |
+| `turn_update_death_animations` | :221 | ★ Фазы DEATH/DECAY: переход на респаун в Личную SPAWN_ROOM. |
+| `turn_update_projectiles` | :271 |  |
+| `turn_reset_attack_status` | :293 |  |
+| `turn_register_hooks` | :308 |  |
 
 ### `php/engine/world.php` (9 фукн.)
 
@@ -283,10 +283,10 @@
 |---|---|---|
 | `getAbilityDefinitions` | :26 | Реестр всех способностей (формат прежний — см. шапку). |
 | `applyAbility` | :101 | Применить способность (валидация дальности из строки игрока "NAME[range]", |
-| `ability_hit_targets` | :164 |  |
-| `ability_apply_instant` | :181 |  |
-| `ability_apply_beam` | :226 |  |
-| `ability_apply_area` | :241 |  |
+| `ability_hit_targets` | :174 |  |
+| `ability_apply_instant` | :191 |  |
+| `ability_apply_beam` | :236 |  |
+| `ability_apply_area` | :251 |  |
 
 ### `php/systems/combat.php` (6 фукн.)
 
@@ -296,23 +296,24 @@
 | `combat_apply_damage` | :51 | ★ Единая функция применения урона любой сущности. |
 | `combat_on_damage_dealt` | :145 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
 | `action_validate` | :167 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
-| `combat_process_attack` | :208 | Базовая линейная атака игрока (processAttack из battle.php). |
-| `combat_register_hooks` | :323 |  |
+| `combat_process_attack` | :211 | Базовая линейная атака игрока (processAttack из battle.php). |
+| `combat_register_hooks` | :326 |  |
 
-### `php/systems/effects.php` (10 фукн.)
+### `php/systems/effects.php` (11 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `getEffectDefinitions` | :41 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
-| `effects_parse` | :78 |  |
-| `effects_format` | :86 |  |
-| `effects_has` | :91 |  |
-| `effects_blocks` | :105 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
-| `effects_get_modifier` | :122 | Суммарный модификатор стата от всех NEGATIVES носителя. |
-| `effects_apply` | :142 | Наложить эффект (или продлить до max длительности). Единственный способ |
-| `effects_on_applied` | :182 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
-| `effects_tick` | :202 | Прогон NEGATIVES носителя на начале хода (turn.start): |
-| `effects_register_hooks` | :273 |  |
+| `getEffectDefinitions` | :43 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
+| `effects_parse` | :82 |  |
+| `effects_format` | :90 |  |
+| `effects_has` | :95 |  |
+| `effects_blocks` | :109 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
+| `effects_block_message` | :129 | Игровое сообщение для игрока о том, ПОЧЕМУ глагол заблокирован. |
+| `effects_get_modifier` | :142 | Суммарный модификатор стата от всех NEGATIVES носителя. |
+| `effects_apply` | :162 | Наложить эффект (или продлить до max длительности). Единственный способ |
+| `effects_on_applied` | :202 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
+| `effects_tick` | :222 | Прогон NEGATIVES носителя на начале хода (turn.start): |
+| `effects_register_hooks` | :296 |  |
 
 ### `php/systems/movement.php` (10 фукн.)
 
@@ -393,15 +394,15 @@
 | `all_entities` | :79 |  |
 | `hostile_to` | :103 | Враждебна ли сущность $entity кастеру $caster_id (игрок)? |
 | `find_target_at_position` | :119 |  |
-| `get_targets_on_line` | :136 | Все враждебные цели на прямой от (x1,y1) до (x2,y2), луч останавливается |
-| `get_targets_in_area` | :159 |  |
-| `is_player_at_position` | :185 | Есть ли игрок на клетке (занятость для движения). Учитывает MOVING: |
-| `is_cell_passable` | :212 | Проходимость клетки: стена (grid==0), неразрушенный объект или живой NPC |
+| `get_targets_on_line` | :148 | Все враждебные цели на прямой от (x1,y1) до (x2,y2), луч останавливается |
+| `get_targets_in_area` | :174 |  |
+| `is_player_at_position` | :200 | Есть ли игрок на клетке (занятость для движения). Учитывает MOVING: |
+| `is_cell_passable` | :227 | Проходимость клетки: стена (grid==0), неразрушенный объект или живой NPC |
 
 
 ## Тесты (tests/)
 
-### `tests/harness_engine.php` (9 фукн.)
+### `tests/harness_engine.php` (11 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -414,6 +415,8 @@
 | `test_poll_room_filtering` | :292 | poll.php — HTTP-эндпоинт: при require сразу исполняет long-poll цикл и |
 | `test_crossroom_targeting` | :331 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
 | `test_world_reset_restores_initial_state` | :379 | T5. ВОСПРОИЗВОДИМОСТЬ ИЗ НАЧАЛЬНОГО СОСТОЯНИЯ (главная регрессия после |
+| `test_paralyzed_blocks_move_with_game_message` | :467 | T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода |
+| `test_dot_expiry_does_not_stop_movement` | :523 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
 
 ### `tests/integration_join.php` (6 фукн.)
 
@@ -433,4 +436,4 @@
 | `check` | :18 |  |
 
 
-<!-- Всего функций: 252 -->
+<!-- Всего функций: 255 -->
