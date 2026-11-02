@@ -318,7 +318,23 @@ function combat_process_attack(&$state, $attacker_id, $target_x, $target_y) {
 
     if (empty($targets_hit)) {
         $attack_message = $attacker_id . ' атакует пустую клетку (' . $target_x . ',' . $target_y . ')';
-        $hit_cells[] = [$target_x, $target_y];
+    }
+
+    // ★ REGRESSION (PUNCTURE + Land Mine): луч, ДОШЕДШИЙ до целевой клетки
+    // (не остановлен преграду — !$stopped), обязан покрывать её в hit_cells
+    // независимо от того, есть ли на ней живая цель. Ловушки (traps) не входят
+    // в all_entities()/find_target_at_position — они активируются именно
+    // покрытием клетки через processTraps ниже. Раньше клетка добавлялась
+    // только при полностью пустом выстреле (empty($targets_hit)), поэтому
+    // атака с PUNCTURE сквозь промежуточного игрока «не доставала» мину:
+    // targets_hit уже был непуст (пробитый блокировщик), финальная клетка
+    // оставалась непокрытой и ловушка на ней не срабатывала.
+    if (!$stopped) {
+        $final_covered = false;
+        foreach ($hit_cells as $c) {
+            if ($c[0] === $target_x && $c[1] === $target_y) { $final_covered = true; break; }
+        }
+        if (!$final_covered) $hit_cells[] = [$target_x, $target_y];
     }
 
     // SPLASH-пассивка — слушатель attack.resolved (systems/passives.php)

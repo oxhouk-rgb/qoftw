@@ -297,7 +297,7 @@
 | `combat_on_damage_dealt` | :174 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
 | `action_validate` | :197 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
 | `combat_process_attack` | :241 | Базовая линейная атака игрока (processAttack из battle.php). |
-| `combat_register_hooks` | :356 |  |
+| `combat_register_hooks` | :372 |  |
 
 ### `php/systems/effects.php` (11 фукн.)
 
@@ -402,7 +402,7 @@
 
 ## Тесты (tests/)
 
-### `tests/harness_engine.php` (12 фукн.)
+### `tests/harness_engine.php` (13 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -418,6 +418,7 @@
 | `test_paralyzed_blocks_move_with_game_message` | :467 | T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода |
 | `test_dot_expiry_does_not_stop_movement` | :524 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
 | `test_death_clears_effects` | :627 | T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED |
+| `test_puncture_attack_reaches_trap_behind_blocker` | :693 | T9. ★ PUNCTURE + Land Mine (регресс бага «атака не достигает мины, если |
 
 ### `tests/integration_join.php` (6 фукн.)
 
@@ -437,4 +438,4 @@
 | `check` | :18 |  |
 
 
-<!-- Всего функций: 256 -->
+<!-- Всего функций: 257 -->

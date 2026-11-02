@@ -680,6 +680,63 @@ function test_death_clears_effects() {
     t_assert(count($pk['NEGATIVES']) === 0, 'убивающий DoT-тик не оставил эффектов (нет «воскрешения» списком)');
 }
 
+/**
+ * T9. ★ PUNCTURE + Land Mine (регресс бага «атака не достигает мины, если
+ * между атакующим и миной стоит игрок»): ловушки не входят в all_entities()
+ * и не могут быть «живой целью» — они активируются покрытием клетки атакой
+ * (processTraps по hit_cells). Раньше финальная клетка попадала в hit_cells
+ * только при полностью пустом выстреле, поэтому выстрел с PUNCTURE сквозь
+ * промежуточного врага «пробивал» блокировщика, но мину за ним не доставал.
+ * Контракт: луч, не остановленный преградой (!$stopped), покрывает целевую
+ * клетку всегда; остановленный (без PUNCTURE) — нет, мина остаётся INTACT.
+ */
+function test_puncture_attack_reaches_trap_behind_blocker() {
+    echo "--- T9: PUNCTURE-атака сквозь игрока активирует Land Mine ---\n";
+    $state = harness_build_state();
+    $pid = 'PLAYER1';   // в сиде есть PUNCTURE
+    $blk = 'PLAYER3';   // враждебен (ALLY NONE), без PUNCTURE
+
+    // Расстановка в комнате A1 на одной строке: P1(1,1) → блокировщик(2,1) → мина(3,1)
+    $p = &$state['players'][$pid];
+    $p['ROOM_ID'] = 'A1'; $p['CUR_POSITION_XY'] = '1,1'; $p['END_POSITION_XY'] = '1,1';
+    $p['STATUS'] = 'IDLE'; $p['ACTIONS'] = $p['MAX_ACTIONS']; $p['NEGATIVES'] = [];
+    unset($p);
+    $p = &$state['players'][$blk];
+    $p['ROOM_ID'] = 'A1'; $p['CUR_POSITION_XY'] = '2,1'; $p['END_POSITION_XY'] = '2,1';
+    $p['STATUS'] = 'IDLE'; $p['NEGATIVES'] = [];
+    unset($p);
+    // Тестовая мина без урона/эффектов — важен сам факт активации клетки
+    $state['traps']['MINE_T9'] = [
+        'ID' => 'MINE_T9', 'TYPE' => 'LAND_MINE', 'IMAGE' => 'LAND_MINE',
+        'ROOM_ID' => 'A1', 'POSITION_XY' => '3,1', 'STATUS' => 'INTACT',
+        'HITPOINTS' => 1, 'DAMAGE' => 0, 'RANGE' => 1, 'EFFECT' => [], 'ALLY' => 'NONE',
+    ];
+
+    // ── a) с PUNCTURE: луч сквозь врага достигает мины и активирует её ──
+    t_assert(hasPassive($state['players'][$pid], 'PUNCTURE'), 'у атакующего есть PUNCTURE');
+    $hp_blk_before = (int)$state['players'][$blk]['HITPOINTS'];
+    $res = combat_process_attack($state, $pid, 3, 1);
+    t_assert(($res['success'] ?? false) === true, 'атака по клетке мины принята (' . ($res['message'] ?? '?') . ')');
+    t_assert((int)$state['players'][$blk]['HITPOINTS'] < $hp_blk_before,
+        'PUNCTURE пробил промежуточного врага (его HP снижен)');
+    t_assert(($state['traps']['MINE_T9']['STATUS'] ?? '') === 'TRIGGERED',
+        'Land Mine за блокировщиком активирована попаданием атаки');
+
+    // ── b) без PUNCTURE: луч стопорится на враге, мина не тронута ──
+    $state['traps']['MINE_T9']['STATUS'] = 'INTACT';
+    $p = &$state['players'][$pid];
+    $p['STATUS'] = 'IDLE'; $p['ACTIONS'] = $p['MAX_ACTIONS']; $p['NEGATIVES'] = [];
+    $p['PASSIVES'] = array_values(array_diff($p['PASSIVES'], ['PUNCTURE']));
+    unset($p);
+    $hp_blk_before = (int)$state['players'][$blk]['HITPOINTS'];
+    $res = combat_process_attack($state, $pid, 3, 1);
+    t_assert(($res['success'] ?? false) === true, 'атака без PUNCTURE принята');
+    t_assert((int)$state['players'][$blk]['HITPOINTS'] < $hp_blk_before,
+        'атака без PUNCTURE остановилась на первом враге (он получил урон)');
+    t_assert(($state['traps']['MINE_T9']['STATUS'] ?? '') === 'INTACT',
+        'мина за блокировщиком НЕ активирована — луч до неё не дошёл');
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
@@ -688,6 +745,7 @@ test_world_reset_restores_initial_state();
 test_paralyzed_blocks_move_with_game_message();
 test_dot_expiry_does_not_stop_movement();
 test_death_clears_effects();
+test_puncture_attack_reaches_trap_behind_blocker();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);
