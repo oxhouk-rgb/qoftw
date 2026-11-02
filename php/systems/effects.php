@@ -177,6 +177,12 @@ function effects_apply(&$state, $target_type, $target_id, $effect_str) {
     if (!isset($defs[$parsed['name']])) return; // неизвестный эффект игнорируется
 
     $player = &$state['players'][$target_id];
+    // ★ Мёртвый/разлагающийся/удалённый — не носитель эффектов: смерть уже
+    // сняла NEGATIVES, любое наложение на труп вернуло бы статус после респауна.
+    if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) {
+        unset($player);
+        return;
+    }
     $found = false;
     foreach ($player['NEGATIVES'] as &$neg) {
         $m = effects_parse($neg);
@@ -258,6 +264,14 @@ function effects_tick(&$state, $player_id) {
             }
             combat_apply_damage($state, 'player', $player_id, $def['ticks_damage'],
                                 $dot_source);
+            // ★ Смерть от DoT-тика: combat уже обнулил NEGATIVES, но цикл ниже
+            // перезаписал бы их собранным $new_negatives — «воскресший» получил
+            // бы эффекты обратно. Прерываем прогон: трупы не тикают дальше.
+            if (in_array($player['STATUS'], ['DEATH', 'DECAY', 'REMOVED'], true)) {
+                $player['NEGATIVES'] = [];
+                unset($player);
+                return;
+            }
         }
 
         if ($kind === 'cc') {

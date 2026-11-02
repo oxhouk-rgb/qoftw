@@ -102,6 +102,11 @@ function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source
                 $player['HITPOINTS'] = 0;
                 $player['STATUS'] = 'DEATH';
                 $player['ACTIONS'] = 0; // мёртвый не может действовать до респауна
+                // ★ Смерть снимает все статус-эффекты (DoT/CC/модификаторы):
+                // труп их не «доживает», а респаун обязан быть чистым —
+                // иначе PARALYZED/STUNNED блокировал бы действия воскресшего
+                // и DOT продолжал бы жечь HP после возрождения.
+                $player['NEGATIVES'] = [];
                 $killed = true;
             }
         }

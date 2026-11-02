@@ -618,6 +618,68 @@ function test_dot_expiry_does_not_stop_movement() {
     unset($p);
 }
 
+/**
+ * T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED
+ * переживают респаун»): NEGATIVES чистятся в момент смерти (единая цепочка
+ * урона), наложение на труп игнорируется, а тик DoT, убивший носителя, не
+ * должен «вернуть» эффекты списком прогона.
+ */
+function test_death_clears_effects() {
+    echo "--- T8: смерть снимает эффекты, респаун чист ---\n";
+    $pid = 'PLAYER1';
+
+    // ── a) гибель от прямого удара: NEGATIVES обнулены сразу ──
+    $state = harness_build_state();
+    $p = &$state['players'][$pid];
+    $p['STATUS'] = 'IDLE';
+    $p['SHIELD'] = 0; $p['MAX_SHIELD'] = 0;
+    $p['HITPOINTS'] = 1;
+    $p['NEGATIVES'] = [];
+    $p['LIFE'] = 2;
+    unset($p);
+    effects_apply($state, 'player', $pid, 'STUNNED[3]');
+    effects_apply($state, 'player', $pid, 'PARALYZED[3]');
+    effects_apply($state, 'player', $pid, 'DOT[3]');
+    effects_apply($state, 'player', $pid, 'SLOWED[3]');
+    t_assert(count($state['players'][$pid]['NEGATIVES']) === 4, 'эффекты наложены (4 записи NEGATIVES)');
+
+    combat_apply_damage($state, 'player', $pid, 5, ['type' => 'test', 'id' => 'T8']);
+    $pd = $state['players'][$pid];
+    t_assert($pd['STATUS'] === 'DEATH', 'смерть наступила (STATUS=DEATH)');
+    t_assert(count($pd['NEGATIVES']) === 0, 'смерть сняла все эффекты (NEGATIVES пуст)');
+    t_assert(!effects_has($pd, 'DOT') && !effects_blocks($pd, 'actions')['blocked'],
+        'ни DoT, ни CC-блока у трупа не осталось');
+
+    // ── b) наложение эффекта на мёртвого игнорируется ──
+    effects_apply($state, 'player', $pid, 'DOT[2]');
+    t_assert(count($state['players'][$pid]['NEGATIVES']) === 0, 'эффект на труп не накладывается');
+
+    // ── c) цепочка DEATH → DECAY → респаун: боец воскресает чистым ──
+    $state['players'][$pid]['DEATH_TIME'] = time() - DEATH_ANIM_SECONDS - 1;
+    turn_update_death_animations($state);
+    t_assert($state['players'][$pid]['STATUS'] === 'DECAY', 'цепочка сдвинулась в DECAY');
+    $state['players'][$pid]['DECAY_TIME'] = time() - DECAY_ANIM_SECONDS - 1;
+    turn_update_death_animations($state);
+    movement_update($state);
+    $pr = $state['players'][$pid];
+    t_assert($pr['STATUS'] === 'IDLE', 'после респауна статус IDLE (не STUNNED из висевших эффектов)');
+    t_assert(count($pr['NEGATIVES']) === 0, 'респаун чист: NEGATIVES пуст');
+    t_assert(!effects_blocks($pr, 'move')['blocked'], 'движение после респауна не заблокировано');
+
+    // ── d) DoT-тик, убивший носителя, не возвращает эффекты списком прогона ──
+    $state2 = harness_build_state();
+    $p = &$state2['players'][$pid];
+    $p['STATUS'] = 'IDLE';
+    $p['SHIELD'] = 0; $p['MAX_SHIELD'] = 0;
+    $p['HITPOINTS'] = 1;
+    $p['NEGATIVES'] = ['DOT[3]', 'PARALYZED[2]'];
+    unset($p);
+    effects_tick($state2, $pid); // DoT(2) > HP(1) → смерть посреди прогона
+    $pk = $state2['players'][$pid];
+    t_assert($pk['STATUS'] === 'DEATH', 'DoT-тик убил игрока');
+    t_assert(count($pk['NEGATIVES']) === 0, 'убивающий DoT-тик не оставил эффектов (нет «воскрешения» списком)');
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
@@ -625,6 +687,7 @@ test_crossroom_targeting();
 test_world_reset_restores_initial_state();
 test_paralyzed_blocks_move_with_game_message();
 test_dot_expiry_does_not_stop_movement();
+test_death_clears_effects();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);

@@ -169,9 +169,9 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `join_stat_value` | :73 | Число характеристики: строго целое min..max (диапазон передаёт вызывающий: |
-| `join_validate_abilities` | :94 | Строгий разбор списка способностей: ровно JOIN_ABILITY_COUNT уникальных |
-| `join_validate_passives` | :124 | Строгий разбор пассивок: 0..JOIN_PASSIVES_MAX уникальных имён из реестра. |
+| `join_stat_value` | :81 | Число характеристики: строго целое min..max (диапазон передаёт вызывающий: |
+| `join_validate_abilities` | :102 | Строгий разбор списка способностей: ровно JOIN_ABILITY_COUNT уникальных |
+| `join_validate_passives` | :132 | Строгий разбор пассивок: 0..JOIN_PASSIVES_MAX уникальных имён из реестра. |
 
 ### `php/poll.php` (1 фукн.)
 
@@ -186,7 +186,7 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `engine_check_victory` | :59 | Проверка победы: все игроки одной стороны мертвы/удалены (кроме последнего). |
+| `engine_check_victory` | :60 | Проверка победы: все игроки одной стороны мертвы/удалены (кроме последнего). |
 
 ### `php/engine/events.php` (6 фукн.)
 
@@ -225,14 +225,14 @@
 | Функция | Строка | Назначение |
 |---|---|---|
 | `turn_start` | :26 | Начало хода: восстановление ACTIONS/щита + эмит turn.start. |
-| `turn_effects_tick` | :70 | Слушатель turn.start (priority 5): прогон эффектов всех живых игроков. |
-| `turn_sync_status_after_effect` | :90 | ★ Инвариант «статус = NEGATIVES» (слушатель effect.applied, priority 10 — |
-| `turn_tick` | :119 | Один серверный тик: все анимационно-временные обновления + ход мира. |
-| `turn_check_advance` | :192 | Проверить/вызвать начало нового хода (если прошло TURN_DURATION). |
-| `turn_update_death_animations` | :221 | ★ Фазы DEATH/DECAY: переход на респаун в Личную SPAWN_ROOM. |
-| `turn_update_projectiles` | :271 |  |
-| `turn_reset_attack_status` | :293 |  |
-| `turn_register_hooks` | :308 |  |
+| `turn_effects_tick` | :72 | Слушатель turn.start (priority 5): прогон эффектов всех живых игроков. |
+| `turn_sync_status_after_effect` | :92 | ★ Инвариант «статус = NEGATIVES» (слушатель effect.applied, priority 10 — |
+| `turn_tick` | :121 | Один серверный тик: все анимационно-временные обновления + ход мира. |
+| `turn_check_advance` | :194 | Проверить/вызвать начало нового хода (если прошло TURN_DURATION). |
+| `turn_update_death_animations` | :223 | ★ Фазы DEATH/DECAY: переход на респаун в Личную SPAWN_ROOM. |
+| `turn_update_projectiles` | :278 |  |
+| `turn_reset_attack_status` | :300 |  |
+| `turn_register_hooks` | :315 |  |
 
 ### `php/engine/world.php` (9 фукн.)
 
@@ -292,28 +292,28 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `calculateDamage` | :34 | Формула урона: base (мин 1), сопротивление −10%/очко (кэп 90%), ceil, мин 1. |
-| `combat_apply_damage` | :51 | ★ Единая функция применения урона любой сущности. |
-| `combat_on_damage_dealt` | :145 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
-| `action_validate` | :167 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
-| `combat_process_attack` | :211 | Базовая линейная атака игрока (processAttack из battle.php). |
-| `combat_register_hooks` | :326 |  |
+| `calculateDamage` | :44 | Формула урона: base (мин 1), сопротивление −10%/очко (кэп 90%), ceil, мин 1. |
+| `combat_apply_damage` | :64 | ★ Единая функция применения урона любой сущности. |
+| `combat_on_damage_dealt` | :174 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
+| `action_validate` | :197 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
+| `combat_process_attack` | :241 | Базовая линейная атака игрока (processAttack из battle.php). |
+| `combat_register_hooks` | :356 |  |
 
 ### `php/systems/effects.php` (11 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `getEffectDefinitions` | :43 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
-| `effects_parse` | :82 |  |
-| `effects_format` | :90 |  |
-| `effects_has` | :95 |  |
-| `effects_blocks` | :109 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
-| `effects_block_message` | :129 | Игровое сообщение для игрока о том, ПОЧЕМУ глагол заблокирован. |
-| `effects_get_modifier` | :142 | Суммарный модификатор стата от всех NEGATIVES носителя. |
-| `effects_apply` | :162 | Наложить эффект (или продлить до max длительности). Единственный способ |
-| `effects_on_applied` | :202 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
-| `effects_tick` | :222 | Прогон NEGATIVES носителя на начале хода (turn.start): |
-| `effects_register_hooks` | :296 |  |
+| `getEffectDefinitions` | :45 | Реестр определений эффектов — ЕДИНСТВЕННЫЙ список семантики статусов. |
+| `effects_parse` | :89 |  |
+| `effects_format` | :97 |  |
+| `effects_has` | :102 |  |
+| `effects_blocks` | :116 | Блокирует ли набор NEGATIVES игрока указанный глагол? |
+| `effects_block_message` | :136 | Игровое сообщение для игрока о том, ПОЧЕМУ глагол заблокирован. |
+| `effects_get_modifier` | :149 | Суммарный модификатор стата от всех NEGATIVES носителя. |
+| `effects_apply` | :169 | Наложить эффект (или продлить до max длительности). Единственный способ |
+| `effects_on_applied` | :215 | Слушатель 'effect.applied': немедленная активация cc-эффектов с immediate=true. |
+| `effects_tick` | :235 | Прогон NEGATIVES носителя на начале хода (turn.start): |
+| `effects_register_hooks` | :324 |  |
 
 ### `php/systems/movement.php` (10 фукн.)
 
@@ -402,7 +402,7 @@
 
 ## Тесты (tests/)
 
-### `tests/harness_engine.php` (11 фукн.)
+### `tests/harness_engine.php` (12 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -416,7 +416,8 @@
 | `test_crossroom_targeting` | :331 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
 | `test_world_reset_restores_initial_state` | :379 | T5. ВОСПРОИЗВОДИМОСТЬ ИЗ НАЧАЛЬНОГО СОСТОЯНИЯ (главная регрессия после |
 | `test_paralyzed_blocks_move_with_game_message` | :467 | T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода |
-| `test_dot_expiry_does_not_stop_movement` | :523 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
+| `test_dot_expiry_does_not_stop_movement` | :524 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
+| `test_death_clears_effects` | :627 | T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED |
 
 ### `tests/integration_join.php` (6 фукн.)
 
@@ -436,4 +437,4 @@
 | `check` | :18 |  |
 
 
-<!-- Всего функций: 255 -->
+<!-- Всего функций: 256 -->

@@ -242,6 +242,11 @@ function turn_update_death_animations(&$state) {
                     $player['LIFE']--;
                     $player['HITPOINTS'] = $player['MAX_HITPOINTS'];
                     $player['SHIELD'] = $player['MAX_SHIELD'];
+                    // ★ Респаун чист от статус-эффектов (страховка: смерть могла
+                    // наступить до правки цепочки урона / в legacy-снимке мира).
+                    // Очистка ДО rooms_teleport — иначе финал «виртуального»
+                    // движения восстановил бы STUNNED из висевших NEGATIVES.
+                    $player['NEGATIVES'] = [];
                     // Респаун через телепорт в личную SPAWN_ROOM (см. шапку):
                     // позиция, ROOM_ID и карта комнаты обновляются атомарно.
                     $spawn_room = $player['SPAWN_ROOM'] ?? '';
