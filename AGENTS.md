@@ -61,6 +61,9 @@ php/systems/abilities.php           — реализация способнос�
 php/systems/objects.php             — бочки/мина/турель
 php/systems/rooms.php               — комнаты, двери, телепорт, респаун
 tests/harness_engine.php            — CLI-харнесс сценарных тестов (in-memory фейк Redis)
+tests/integration_join.php          — HTTP-интеграл цикла init→join→poll (fake Redis;
+                                      run_integration_join.sh — прогон OVER-HTTP через php -S)
+tests/verify_llf.py · docs/gen_llf.sh — regenerate и честность-проверка индекса LLF.md
 docs/LLF.md                         — ★ индекс всех функций (имя → файл:строка → назначение)
 ARCH.md / ABOUT.md / README.md      — справочники; читать ВЫБОРОЧНО по таблице §1, не целиком
 ```
