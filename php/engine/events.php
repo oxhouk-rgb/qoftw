@@ -20,7 +20,7 @@
  * ----------------------------------------------------------------------------
  * turn.start                | {}                                        | fact    | passives(on_turn_start), effects(tick), objects(npc actions), combat(regen)
  * damage.query_mitigate     | {target_type,target_id,damage}            | reduce  | passives(ARMORED), эффекты брони
- * damage.dealt              | {source_type,source_id,target_type,target_id,damage,shield_absorbed} | fact | combat(interrupt move), passives(THORNS)
+ * damage.dealt              | {source_type,source_id,non_interrupting,target_type,target_id,damage,shield_absorbed} | fact | combat(interrupt move; пропускает источники с non_interrupting=true — DoT и будущие фоновые), passives(THORNS)
  * entity.died               | {type,id,killer_type,killer_id}           | fact    | death-chain, логи
  * attack.resolved           | {attacker_id,x,y,hit_cells:[...]}         | fact    | passives(SPLASH)
  * effect.applied            | {target_type,target_id,name,duration}     | fact    | effects(immediate cc activation)

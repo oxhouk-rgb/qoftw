@@ -203,7 +203,7 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
 | Событие | Вид | Кто эмитит | Кто слушает |
 |---|---|---|---|
 | `damage.query_mitigate` | query (payload by-ref) | combat_apply_damage | passives (ARMORED ÷2 от pierce-атак), combat (RESISTANCE; ARMOR_CRUSH pierce читается напрямую через `combat_should_pierce_resistance`) |
-| `damage.dealt` | fact | combat_apply_damage | combat (прерывание MOVING при реальном уроне, p0), passives (THORNS, p10) |
+| `damage.dealt` | fact | combat_apply_damage | combat (прерывание MOVING при реальном уроне, p0; источники с `non_interrupting=true` — DoT и будущие фоновые — не прерывают), passives (THORNS, p10) |
 | `entity.died` | fact | combat_apply_damage (HP ≤ 0 → STATUS='DEATH') | death-chain, логи |
 | `attack.resolved` | fact | processAttack | passives (SPLASH) |
 | `effect.applied` | fact | effects_apply | effects (немедленная активация CC) |
@@ -332,7 +332,11 @@ poll.php или чужое подключение не затираются. Э�
   реген щита `SHIELD_REGEN_PER_TURN=1`; THORNS/SPLASH — контур и разброс (слушатели шины в
   passives.php). NPC-урон (турель/мина) идёт по той же цепочке без RESISTANCE-редукции цели —
   одинаковый по всем целям. Прерывание MOVING — только при реально нанесённом уроне
-  (полностью поглощённый щитом движение не останавливает). Мёртвые (DEATH/DECAY) целями не являются.
+  от прерывающих источников (полностью поглощённый щитом движение не останавливает;
+  DoT помечен в реестре эффектов `interrupts_movement=false` → `source['non_interrupting']`
+  → слушатель `damage.dealt` пропускает прерывание: тик DoT в пути не гасит перемещение,
+  даже если урон прошёл сквозь щит на HP). Флаг — общий механизм для будущих
+  «фоновых» источников урона без торможения. Мёртвые (DEATH/DECAY) целями не являются.
 - **Способности**: 4 механизма `projectile`: `none` (instant/self_buff/ally_buff), `beam`, `line`,
   `area(aoe)`; типов урона нет — урон просто урон; эффекты `ЭФФЕКТ[ходы]`: PARALYZED, DOT,
   STUNNED, SLOWED, BLINDED. Снаряды-визуализации живут в `projectiles` с фазами cast→hit→done

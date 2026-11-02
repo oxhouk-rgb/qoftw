@@ -14,7 +14,9 @@
  *
  * KIND'Ы ЭФФЕКТОВ:
  *   dot      — тикает уроном на turn.start (ticks_damage); универсальный
- *              постепенный урон DOT[N] (заменил дубликаты BLEED/POISONED)
+ *              постепенный урон DOT[N] (заменил дубликаты BLEED/POISONED);
+ *              interrupts_movement=false → тик НЕ прерывает движение цели
+ *              (флаг уходит в source combat_apply_damage → damage.dealt)
  *   cc       — блокирует глаголы (blocks: move|attack|ability|special|actions);
  *              immediate=true → при наложении вне движения сразу ставит STATUS
  *              и обнуляет ACTIONS (кроме MOVING/DEATH/DECAY — спрайт должен
@@ -43,10 +45,15 @@ require_once __DIR__ . '/../engine/rules.php';
 function getEffectDefinitions() {
     return [
         // DoT: универсальный постепенный урон в начале каждого хода
-        // (заменил дубликаты BLEED/POISONED — механика одна: −1 HP/ход, N ходов)
+        // (заменил дубликаты BLEED/POISONED — механика одна: −2 HP/ход, N ходов)
         'DOT' => [
-            'kind' => 'dot', 'ticks_damage' => 1,
-            'description' => 'Постепенный урон: 1 урон за ход',
+            'kind' => 'dot', 'ticks_damage' => 2,
+            // ★ Постепенный урон НЕ прерывает движение жертвы (флаг прокидывается
+            // в source combat_apply_damage → damage.dealt → combat_on_damage_dealt).
+            // По умолчанию dot-эффекты считаются прерывающими; без прерывания —
+            // только те, что явно декларируют interrupts_movement=false.
+            'interrupts_movement' => false,
+            'description' => 'Постепенный урон: 2 урона за ход (не прерывает движение)',
         ],
         // CC: блокируют действия; декларируют ЧТО именно
         // (глаголы-ключи: move/attack/ability/special — special = третья
@@ -234,16 +241,23 @@ function effects_tick(&$state, $player_id) {
 
         if ($kind === 'dot' && !empty($def['ticks_damage'])) {
             // Единая цепочка урона (щит→HP→death) — systems/combat.php.
-            // ★ Движение НЕ прерываем явно: DoT — постепенный урон, а не удар.
-            // Единственная точка прерывания MOVING — слушатель damage.dealt
-            // (combat_on_damage_dealt), который останавливает спрайт только при
-            // уроне, прошедшем сквозь щит (damage > 0). Раньше здесь стоял
-            // безусловный movement_interrupt() «до урона» — из-за этого тик/
-            // истечение DOT[1] на начале хода мгновенно гасил END_POSITION_XY
-            // в промежуточную клетку, и игрок останавливался ровно там, где
-            // эффект исчез, так и не доехав до финальной точки перемещения.
+            // ★ Движение НЕ прерываем: DoT — постепенный урон, а не удар.
+            // Механика реализована декларативно: interrupts_movement=false из
+            // реестра превращается в source['non_interrupting'], который читает
+            // combat_on_damage_dealt (единственная точка прерывания MOVING).
+            // Так щадящий к движению режим получают только эффекты, явно его
+            // заявившие; остальные источники (атака, турели, мины, thorns)
+            // прерывают движение по-прежнему. Раньше здесь стоял безусловный
+            // movement_interrupt() «до урона» — из-за этого тик/истечение DOT[1]
+            // на начале хода мгновенно гасил END_POSITION_XY в промежуточную
+            // клетку, и игрок останавливался ровно там, где эффект исчез, так и
+            // не доехав до финальной точки перемещения.
+            $dot_source = ['type' => 'effect', 'id' => $p['name']];
+            if (($def['interrupts_movement'] ?? true) === false) {
+                $dot_source['non_interrupting'] = true;
+            }
             combat_apply_damage($state, 'player', $player_id, $def['ticks_damage'],
-                                ['type' => 'effect', 'id' => $p['name']]);
+                                $dot_source);
         }
 
         if ($kind === 'cc') {
