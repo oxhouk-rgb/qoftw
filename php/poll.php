@@ -32,6 +32,7 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
 
     $timeout = LONG_POLL_TIMEOUT; // сек
     $start_time = time();
+    $server_version = $client_version; // страховка: виток мог уйти на continue до присваивания
 
     try {
         while (true) {
@@ -43,6 +44,8 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
             // проглатываются, цикл продолжает тикать; ответ гарантирован по таймауту.
             try {
                 $state = world_load();
+                // Версия снапшота ДО тика — базовая для CAS-записей этого витка.
+                $base_version = (int)($state['version'] ?? 0);
 
                 // ★ turn_time = серверный дедлайн хода. Значение обязан задать
                 // сборщик мира (engine/world_reset.php пишет его всегда). Здесь —
@@ -57,7 +60,9 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
                 // помогал», потому что живой poll тут же перетирал сброс.
                 if (($state['turn_time'] ?? null) === null || $state['turn_time'] === '') {
                     $state['turn_time'] = time();
-                    world_save($state);
+                    [$tick_written, $state] = world_save_cas($state, $base_version);
+                    if (!$tick_written) continue; // гонка — виток заново на свежем снапшоте
+                    $base_version = (int)($state['version'] ?? $base_version);
                 }
 
                 // Серверный тик движка (включая ход мира turn_check_advance — он
@@ -68,9 +73,18 @@ set_time_limit(LONG_POLL_TIMEOUT + 10);
                 // эффекты (STUNNED/DOT), движение, смерть и таймер хода обязаны
                 // тикать независимо от роли читателя (иначе оглушение «висит
                 // вечно», пока игрок не откроет свой клиент заново).
+                // ★ ИСПРАВЛЕНИЕ второй половины бага «потери пакета»: запись
+                // тика — только CAS по версии загруженного снапшота. Раньше
+                // world_save() писал безусловно, и тик, успевший загрузить мир
+                // ДО действия игрока, затирал его действие старым снапшотом
+                // (клиент видел «Действие выполнено», а персонаж стоял на месте).
+                // При гонке тик НЕ ребейзим намеренно: параллельный процесс
+                // (действие/другой тик) уже сдвинул мир, а свой виток мы
+                // повторим на следующей итерации со свежим world_load().
                 $changed_by_tick = turn_tick($state);
                 if ($changed_by_tick) {
-                    world_save($state);
+                    [$tick_written, $state] = world_save_cas($state, $base_version);
+                    if (!$tick_written) continue; // мир изменился параллельно — перечитать
                 }
 
                 $server_version = world_version();

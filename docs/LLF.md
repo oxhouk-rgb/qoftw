@@ -177,7 +177,7 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `build_poll_response` | :122 | Сборка flat-ответа poll (контракт клиента js/net.js/render.js render(data)). |
+| `build_poll_response` | :136 | Сборка flat-ответа poll (контракт клиента js/net.js/render.js render(data)). |
 
 
 ## Ядро движка (php/engine/)
