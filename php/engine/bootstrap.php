@@ -7,7 +7,8 @@
  * работают только с API движка (engine/world, systems/*).
  *
  * ПОРЯДОК РЕГИСТРАЦИИ СЛУШАТЕЛЕЙ (важно для детерминизма):
- *   combat   → damage.dealt (interrupt move, priority 0)
+ *   combat   → damage.dealt (interrupt move, priority 0; источники с
+ *              non_interrupting=true — DoT и будущие фоновые — не прерывают)
  *   passives → damage.query_mitigate(ARMORED), damage.dealt(THORNS, p10),
  *               movement.query_distance(SWIFT/SLOWED), turn.start(REGEN),
  *               attack.resolved(SPLASH)

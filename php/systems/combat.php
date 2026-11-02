@@ -13,8 +13,18 @@
  *   2) щит поглощает остаток
  *   3) HP; при обнулении → STATUS='DEATH' + emit('entity.died')
  *   4) emit('damage.dealt')                 → listeners:
- *        - combat_self: прерывание MOVING жертвы (movement.interrupted)
+ *        - combat_self: прерывание MOVING жертвы (movement.interrupted),
+ *          КРОМЕ источников, помеченных non_interrupting (см. ниже)
  *        - passives:    THORNS (ответный урон атакующему — рекурсивно сюда же)
+ *
+ * ИСТОЧНИКИ УРОНА БЕЗ ПРЕРЫВАНИЯ ДВИЖЕНИЯ: $source['non_interrupting'] = true
+ * — декларация того, что данный источник НЕ останавливает спрайт жертвы при
+ * тике (урон идёт по щит/HP, анимация перемещения продолжается). Закреплена за
+ * DoT-эффектами (effects_tick передаёт её из реестра: def['interrupts_movement']
+ * => false); в дальнейшем флаг можно ставить любым новым источникам урона
+ * (минные поля, зонды и т.п.) — отдельная схема не нужна, достаточно поля
+ * source-массива: combat_on_damage_dealt пропускает прерывание, все остальные
+ * слушатели (THORNS и будущие) получают событие как обычно.
  */
 
 require_once __DIR__ . '/../engine/events.php';
@@ -46,6 +56,9 @@ function calculateDamage($base_damage, $attack_stat, $resistance, $pierce = fals
  * @param string $target_id
  * @param int    $damage          уже рассчитанный (после calculateDamage)
  * @param array  $source          ['type'=>'player|npc|trap|effect|turret','id'=>...]
+ *                                + необязательный флаг 'non_interrupting' => true —
+ *                                  источник наносит урон БЕЗ прерывания движения цели
+ *                                  (DoT и будущие «фоновые» источники, см. шапку)
  * @return array ['dealt'=>int,'shield_absorbed'=>int,'killed'=>bool]
  */
 function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source) {
@@ -116,6 +129,10 @@ function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source
     emit($state, 'damage.dealt', [
         'source_type' => $source['type'] ?? 'unknown',
         'source_id' => $source['id'] ?? null,
+        // ★ Флаг источника «урон без прерывания движения» прокидывается в
+        // событие: combat_on_damage_dealt его читает, остальные слушатели
+        // (THORNS и будущие) могут игнорировать — для них это прозрачно.
+        'non_interrupting' => !empty($source['non_interrupting']),
         'target_type' => $target_type,
         'target_id' => $target_id,
         'damage' => $damage,
@@ -141,10 +158,18 @@ function combat_apply_damage(&$state, $target_type, $target_id, $damage, $source
  * спрайт только при damage > 0 (прошедшем сквозь щит). Иначе турель с малым
  * уроном «замораживала» идущего игрока на каждом шаге, а реген щита делал её
  * безобидной — ровно тот шторм ATTACK-анимаций и «вечный stun», что были в баг-репорте.
+ *
+ * ★ Источники с флагом non_interrupting (ныне — DoT из effects_tick) НЕ
+ * прерывают движение даже при уроне сквозь щит: постепенный урон — не удар,
+ * спрайт обязан доехать до финальной клетки перемещения. Флаг берётся из
+ * source-массива вызывающей стороны (единая точка решения — реестр эффектов),
+ * поэтому новым «фоновым» источникам достаточно передать его в $source —
+ * отдельная схема нанесения урона не нужна.
  */
 function combat_on_damage_dealt(&$state, $payload) {
     if ($payload['target_type'] !== 'player') return;
     if ($payload['damage'] <= 0) return; // щит поглотил всё — движение продолжается
+    if (!empty($payload['non_interrupting'])) return; // DoT и др. фоновые источники
     $player = $state['players'][$payload['target_id']] ?? null;
     if (!$player) return;
     if ($player['STATUS'] === 'MOVING') {

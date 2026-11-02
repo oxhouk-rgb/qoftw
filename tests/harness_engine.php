@@ -511,12 +511,13 @@ function test_paralyzed_blocks_move_with_game_message() {
  * так и не доехав до финальной точки перемещения.
  *
  * Корректное поведение (единая цепочка урона, ARCH.md §5): прерывание MOVING
- * принадлежит слушателю damage.dealt и происходит только при уроне, прошедшем
- * сквозь щит (damage > 0). Поэтому:
+ * принадлежит слушателю damage.dealt; DoT-источники помечены в реестре эффектов
+ * interrupts_movement=false → флаг non_interrupting в source → listener НЕ
+ * останавливает спрайт даже при уроне сквозь щит. Поэтому:
  *   a) истечение DOT[1] в пути — ход не трогается вообще;
- *   b) тик DOT[3] при ПОЛНОСТЬЮ поглощающем щите — движение продолжается
- *      (раньше именно этот случай молча останавливал спрайт: movement_interrupt
- *      вызывался ДО combat_apply_damage, ещё не зная, сколько поглотит щит);
+ *   b) тик DOT[3] при щите, НЕ поглощающем весь урон (урон проходит на HP), —
+ *      движение всё равно продолжается (★ новый контракт non_interrupting:
+ *      раньше такой тик прерывал спрайт через damage.dealt);
  *   c) прямой удар с тем же уроном сквозь щит — движение ПРЕРЫВАЕТСЯ (этот
  *      контракт не сломан правкой).
  */
@@ -564,15 +565,18 @@ function test_dot_expiry_does_not_stop_movement() {
     t_assert($pa['CUR_POSITION_XY'] === $end_xy,
         "игрок доехал до финальной точки ($end_xy), факт: {$pa['CUR_POSITION_XY']}");
 
-    // ── b) активный DOT[3] тикает в пути при щите, поглощающем весь урон ────
+    // ── b) активный DOT[3] тикает в пути, щит НЕ поглощает весь урон ────────
+    // ★ Контракт non_interrupting: DoT снимает HP даже без щита, но спрайт
+    // обязан продолжить движение (раньше такой тик прерывал его через
+    // damage.dealt, т.к. урон проходил сквозь щит). ticks_damage DOT = 2.
     $p = &$state['players'][$pid];
     $p['STATUS'] = 'IDLE';
     $p['CUR_POSITION_XY'] = '1,1';
     $p['START_POSITION_XY'] = '1,1';
     $p['END_POSITION_XY'] = '1,1';
-    $p['SHIELD'] = 5;                  // ticks_damage DOT = 1 → щит глотает всё
+    $p['SHIELD'] = 1;                  // щит заведомо меньше урона DoT (2)
     $p['MAX_SHIELD'] = 5;
-    $p['HITPOINTS'] = max(5, $p['HITPOINTS']);
+    $p['HITPOINTS'] = max(10, $p['HITPOINTS']);
     $p['NEGATIVES'] = ['DOT[3]'];
     $hp_before = $p['HITPOINTS'];
     unset($p);
@@ -580,13 +584,13 @@ function test_dot_expiry_does_not_stop_movement() {
     t_assert(($res['success'] ?? false) === true, 'второй ход принят');
     $end_xy2 = $state['players'][$pid]['END_POSITION_XY'];
 
-    turn_start($state);               // тик DOT[3]: урон в щит, duration→2
+    turn_start($state);               // тик DOT[3]: 1 в щит + 1 на HP, duration→2
     $pb = $state['players'][$pid];
     t_assert(effects_has($pb, 'DOT'), 'DOT[3] после тика продлился до DOT[2]');
-    t_assert((int)$pb['HITPOINTS'] === $hp_before,
-        "урон DoT полностью поглотил щит — HP не изменился ($hp_before → {$pb['HITPOINTS']})");
+    t_assert((int)$pb['HITPOINTS'] === $hp_before - 1,
+        "урон DoT сверх щита снял 1 HP ($hp_before → {$pb['HITPOINTS']})");
     t_assert($pb['STATUS'] === 'MOVING' && $pb['END_POSITION_XY'] === $end_xy2,
-        'тик DoT, поглощённый щитом, НЕ прерывает плавное перемещение');
+        'тик DoT, прошедший сквозь щит на HP, НЕ прерывает плавное перемещение (non_interrupting)');
 
     // ── c) контракт damage.dealt не сломан: прямой удар сквозь щит прерывает ─
     $p = &$state['players'][$pid];
