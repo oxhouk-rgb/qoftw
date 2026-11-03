@@ -195,6 +195,74 @@ function world_action_ack_get($player_id, $action_id) {
     return $ack;
 }
 
+// ★ Резервирование action_id (устранение гонки «проверил-применил»):
+// ранее ack записывался только ПОСЛЕ успешного save, поэтому клиентский ретрай
+// (таймаут 10 с / 5xx / битый ответ) мог прийти, пока оригинал ЕЩЁ обрабатывался
+// (длинный цикл CAS-ребейзов при активном тикере — движущаяся цель усугубляет),
+// ack-журнал был пуст, и действие применялось ВТОРОЙ раз — двойной урон.
+// Теперь перед применением действие атомарно резервируется меткой pending
+// (HSETNX): параллельный дубликат получает 503 и ретраит, а после завершения
+// оригинала — штатное подтверждение по ack.
+if (!defined('ACTION_ACK_PENDING_STALE')) {
+    define('ACTION_ACK_PENDING_STALE', 30); // «зависший» pending (упавший процесс) старше 30 с перехватывается
+}
+
+/**
+ * Атомарно зарезервировать action_id перед применением действия.
+ * @return string 'reserved' — можно применять; 'pending' — такой же action_id
+ *                уже обрабатывается параллельно (повторять НЕЛЬЗЯ);
+ *                'noop' — action_id не передан (старый клиент, поведения нет).
+ */
+function world_action_ack_reserve($player_id, $action_id) {
+    if ($action_id === null || $action_id === '') return 'noop';
+    $key = $player_id . '|' . $action_id;
+    try {
+        $redis = getRedis();
+        $marker = json_encode(['success' => false, 'pending' => true, 'ts' => time()]);
+        if ($redis->hSetNx(REDIS_ACTION_ACKS, $key, $marker)) {
+            $redis->expire(REDIS_ACTION_ACKS, ACTION_ACK_TTL);
+            return 'reserved';
+        }
+        $raw = $redis->hGet(REDIS_ACTION_ACKS, $key);
+        $ack = json_decode((string)$raw, true);
+        if (!is_array($ack)) { // мусор — перехватываем слот
+            $redis->hSet(REDIS_ACTION_ACKS, $key, $marker);
+            return 'reserved';
+        }
+        if (!empty($ack['pending'])) {
+            if (time() - (int)($ack['ts'] ?? 0) > ACTION_ACK_PENDING_STALE) {
+                // оригинал мёртв (process killed до release) — перехватываем
+                $redis->hSet(REDIS_ACTION_ACKS, $key, $marker);
+                $redis->expire(REDIS_ACTION_ACKS, ACTION_ACK_TTL);
+                return 'reserved';
+            }
+            return 'pending';
+        }
+        return 'reserved'; // завершённый ack здесь же — его обработает world_action_ack_get
+    } catch (Throwable $e) {
+        return 'reserved'; // хранилище недоступно — fail-open, как в ack_get
+    }
+}
+
+/**
+ * Снять pending-резерв (действие отклонено/упало — повтор должен быть возможен).
+ * Завершённый ack (success=true) НЕ трогается.
+ */
+function world_action_ack_release($player_id, $action_id) {
+    if ($action_id === null || $action_id === '') return;
+    try {
+        $redis = getRedis();
+        $key = $player_id . '|' . $action_id;
+        $raw = $redis->hGet(REDIS_ACTION_ACKS, $key);
+        $ack = json_decode((string)$raw, true);
+        if (is_array($ack) && !empty($ack['pending'])) {
+            $redis->hDel(REDIS_ACTION_ACKS, $key);
+        }
+    } catch (Throwable $e) {
+        // не удалось снять — повтор будет отвергнут до протухания stale-окна
+    }
+}
+
 /**
  * Записать подтверждение применённого действия (после успешного world_save).
  */

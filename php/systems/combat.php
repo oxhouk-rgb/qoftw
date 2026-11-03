@@ -337,12 +337,22 @@ function combat_process_attack(&$state, $attacker_id, $target_x, $target_y) {
         if (!$final_covered) $hit_cells[] = [$target_x, $target_y];
     }
 
-    // SPLASH-пассивка — слушатель attack.resolved (systems/passives.php)
+    // SPLASH-пассивка — слушатель attack.resolved (systems/passives.php).
+    // ★ hit_ids — сущности, ПОЛУЧИВШИЕ урон прямой атакой: splash обязан их
+    // пропустить. Иначе движущаяся цель, у которой щит поглотил удар целиком
+    // (движение не прервано → STATUS всё ещё MOVING), получала второй урон от
+    // splash: прямое попадание считалось по CUR-клетке, а splash брал её же
+    // цель по END-клетке, которая всегда соседняя с CUR → двойной урон.
+    $hit_ids = [];
+    foreach ($targets_hit as $hit) {
+        $hit_ids[$hit['target']['id']] = true;
+    }
     emit($state, 'attack.resolved', [
         'attacker_id' => $attacker_id,
         'x' => $target_x,
         'y' => $target_y,
         'hit_cells' => $hit_cells,
+        'hit_ids' => array_keys($hit_ids),
     ]);
 
     // Ловушки на всех атакованных клетках (активируются попаданием атаки)

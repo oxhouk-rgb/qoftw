@@ -231,7 +231,7 @@
 | Функция | Строка | Назначение |
 |---|---|---|
 | `rules_turn_formula` | :60 | Серверная формула направления спрайта TURN (только лево/право): |
-| `rules_client_payload` | :69 | Пакет правил для отправки клиенту (поле "rules" в ответах init/poll). |
+| `rules_client_payload` | :69 | Пакет правил для отправки клиенту (поле "rules" в ответах init/тик). |
 
 ### `php/engine/snapshot.php` (2 фукн.)
 
@@ -254,7 +254,7 @@
 | `turn_reset_attack_status` | :300 |  |
 | `turn_register_hooks` | :315 |  |
 
-### `php/engine/world.php` (9 фукн.)
+### `php/engine/world.php` (11 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -264,9 +264,11 @@
 | `world_save_cas` | :106 | Атомарное сохранение с контролем конкурентности (CAS / optimistic locking). |
 | `world_init` | :127 | Инициализировать мир заново из данных комнаты/бойцов (используется init.php). |
 | `world_log` | :143 | Добавить запись в журнал боя (журнал — читаемые события, не трассировка). |
-| `world_version` | :151 | Текущая версия мира (для long-poll цикла). Устойчив к закрытому соединению: |
+| `world_version` | :151 | Текущая версия мира (для long-тик цикла). Устойчив к закрытому соединению: |
 | `world_action_ack_get` | :184 | Проверить, применено ли действие с таким action_id ранее. |
-| `world_action_ack_set` | :201 | Записать подтверждение применённого действия (после успешного world_save). |
+| `world_action_ack_reserve` | :216 | Атомарно зарезервировать action_id перед применением действия. |
+| `world_action_ack_release` | :251 | Снять pending-резерв (действие отклонено/упало — повтор должен быть возможен). |
+| `world_action_ack_set` | :269 | Записать подтверждение применённого действия (после успешного world_save). |
 
 ### `php/engine/world_builder.php` (13 фукн.)
 
@@ -317,7 +319,7 @@
 | `combat_on_damage_dealt` | :174 | (округлённой по серверным часам) клетке. Раньше это было встроено в оба |
 | `action_validate` | :197 | ★ Единая точка валидации глагола перед любым действием (move/attack/ability/special). |
 | `combat_process_attack` | :241 | Базовая линейная атака игрока (processAttack из battle.php). |
-| `combat_register_hooks` | :372 |  |
+| `combat_register_hooks` | :382 |  |
 
 ### `php/systems/effects.php` (11 фукн.)
 
@@ -377,17 +379,17 @@
 | Функция | Строка | Назначение |
 |---|---|---|
 | `getPassiveDefinitions` | :33 | Реестр пассивок. value — числовое значение эффекта. |
-| `hasPassive` | :73 |  |
-| `getPassiveValue` | :78 |  |
-| `combat_should_pierce_resistance` | :91 | ★ Query стиля атаки (как hasPassive(PUNCTURE)): должен ли атакующий-игрок |
-| `applyPassiveDefense` | :104 | Модификация входящего урона пассивками (старое имя сохранено как обёртка — |
-| `passives_on_mitigate` | :117 | Слушатель damage.query_mitigate (by-ref!): переработанная ARMORED — |
-| `passives_on_damage_dealt` | :132 | Слушатель damage.dealt: THORNS — жертва-игрок бьёт атакующего-игрока во |
-| `passives_on_query_distance` | :155 | Слушатель movement.query_distance (by-ref): SWIFT добавляет +value к |
-| `passives_effects_move_modifier` | :164 |  |
-| `passives_on_turn_start` | :176 | Слушатель REGENERATION на turn.start: +value HP (кэп MAX_HITPOINTS). |
-| `passives_on_attack_resolved` | :205 | ★ SPLASH — слушатель attack.resolved. Полностью переписан: вместо цикла |
-| `passives_register_hooks` | :257 |  |
+| `hasPassive` | :74 |  |
+| `getPassiveValue` | :79 |  |
+| `combat_should_pierce_resistance` | :92 | ★ Query стиля атаки (как hasPassive(PUNCTURE)): должен ли атакующий-игрок |
+| `applyPassiveDefense` | :106 | Модификация входящего урона пассивками (старое имя сохранено как обёртка — |
+| `passives_on_mitigate` | :119 | Слушатель damage.query_mitigate (by-ref!): переработанная ARMORED — |
+| `passives_on_damage_dealt` | :134 | Слушатель damage.dealt: THORNS — жертва-игрок бьёт атакующего-игрока во |
+| `passives_on_query_distance` | :157 | Слушатель movement.query_distance (by-ref): SWIFT добавляет +value к |
+| `passives_effects_move_modifier` | :166 |  |
+| `passives_on_turn_start` | :178 | Слушатель REGENERATION на turn.start: +value HP (кэп MAX_HITPOINTS). |
+| `passives_on_attack_resolved` | :207 | ★ SPLASH — слушатель attack.resolved. Полностью переписан: вместо цикла |
+| `passives_register_hooks` | :266 |  |
 
 ### `php/systems/rooms.php` (12 фукн.)
 
@@ -422,7 +424,7 @@
 
 ## Тесты (tests/)
 
-### `tests/harness_engine.php` (13 фукн.)
+### `tests/harness_engine.php` (15 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
@@ -439,6 +441,8 @@
 | `test_dot_expiry_does_not_stop_movement` | :511 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
 | `test_death_clears_effects` | :614 | T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED |
 | `test_puncture_attack_reaches_trap_behind_blocker` | :680 | T9. ★ PUNCTURE + Land Mine (регресс бага «атака не достигает мины, если |
+| `test_splash_does_not_rehit_moving_target` | :735 | T10. ★ Двойной урон по движущейся цели от SPLASH (регресс бага 11/2026): |
+| `test_armor_crush_and_armored_same_owner` | :775 | T11. ★ ARMORED + ARMOR_CRUSH на одном игроке (регресс бага 11/2026): |
 
 ### `tests/integration_join.php` (7 фукн.)
 
@@ -459,4 +463,4 @@
 | `check` | :18 |  |
 
 
-<!-- Всего функций: 268 -->
+<!-- Всего функций: 272 -->

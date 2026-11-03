@@ -45,10 +45,11 @@ function getPassiveDefinitions() {
         ],
         'ARMOR_CRUSH' => [
             'name' => 'ARMOR CRUSH', 'type' => 'resist_pierce',
-            // Атаки игрока игнорируют всё сопротивление цели (RESISTANCE и
-            // снижение ARMORED), но только если у атакующего НЕТ ARMORED
-            // (взаимоисключающая синергия — см. combat_should_pierce_resistance).
-            'description' => 'Атаки игнорируют сопротивление врага (не действует, есть ARMORED)', 'value' => 0,
+            // Атаки игрока игнорируют всё сопротивление цели (RESISTANCE).
+            // Собственная ARMORED НЕ гасит пробитие (баг 11/2026: раньше две
+            // пассивки на одном игроке нейтрализовали друг друга) — ARMORED
+            // взаимодействует только с ЧУЖИМ ARMOR CRUSH, а не со своим.
+            'description' => 'Атаки игнорируют сопротивление врага', 'value' => 0,
         ],
         'SPLASH' => [
             'name' => 'SPLASH', 'type' => 'on_attack',
@@ -93,8 +94,9 @@ function combat_should_pierce_resistance($state, $source) {
     if (!in_array($type, ['player', 'splash', 'ability'], true)) return false;
     $attacker = $state['players'][$source['id']] ?? null;
     if (!$attacker) return false;
-    // Взаимоисключение: собственная ARMORED гасит пробитие брони
-    return hasPassive($attacker, 'ARMOR_CRUSH') && !hasPassive($attacker, 'ARMORED');
+    // ★ Собственная ARMORED НЕ отключает пробитие: ARMORED реагирует только на
+    // наличие ARMOR_CRUSH у ПРОТИВНИКА (см. passives_on_mitigate), а не у себя.
+    return hasPassive($attacker, 'ARMOR_CRUSH');
 }
 
 /**
@@ -221,8 +223,15 @@ function passives_on_attack_resolved(&$state, $payload) {
         }
     }
 
+    // ★ Цели, уже получившие урон прямой атакой, splash НЕ бьют повторно:
+    // движущаяся цель в прямой атаке берётся по CUR-клетке, а splash — по
+    // END-клетке (соседняя), из-за чего одна сущность получала двойной урон,
+    // если щит поглотил удар и движение не прервалось (баг 11/2026).
+    $already_hit = array_flip($payload['hit_ids'] ?? []);
+
     $victims = [];
     foreach (all_entities($state, $attacker_room) as $e) {
+        if (isset($already_hit[$e['id']])) continue;
         if (!hostile_to($e, $attacker_id, $caster_ally)) continue;
 
         // Для движущегося игрока — конечная клетка (как делал старый splash)

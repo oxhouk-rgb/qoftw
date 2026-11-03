@@ -62,6 +62,25 @@ try {
         exit;
     }
 
+    // ★ Атомарный резерв action_id ДО любой мутации (см. world_action_ack_reserve):
+    // закрывает гонку «проверил-применил» — клиентский ретрай (таймаут/5xx),
+    // пришедший пока оригинал ещё считается в цикле CAS, получает 503 и
+    // повторяет позже, а НЕ применяет то же действие второй раз (двойной урон).
+    $ack_slot = ['reserved' => false, 'player' => $player_id, 'action_id' => $action_id];
+    if (world_action_ack_reserve($player_id, $action_id) === 'pending') {
+        closeRedis();
+        jsonError('Действие ещё обрабатывается сервером, повторите позже', 503);
+    }
+    $ack_slot['reserved'] = ($action_id !== null && $action_id !== '');
+
+    // Страховка от любого нетривиального выхода (fatal/exception после резерва):
+    // если ack-подтверждение НЕ было записано, pending-метка снимается, иначе
+    // честный повтор клиента упёрся бы в 503 до протухания stale-окна.
+    register_shutdown_function(function () use (&$ack_slot) {
+        if (empty($ack_slot['reserved']) || !empty($ack_slot['finalized'])) return;
+        world_action_ack_release($ack_slot['player'], $ack_slot['action_id']);
+    });
+
     [$state, $base_version] = world_load_versioned();
 
     if (!isset($state['players'][$player_id])) {
@@ -240,6 +259,7 @@ try {
             'message' => $result['message'],
             'version' => $new_version,
         ]);
+        $ack_slot['finalized'] = true; // ack записан (перезаписал pending) — release не нужен
 
         closeRedis();
         ob_end_clean();

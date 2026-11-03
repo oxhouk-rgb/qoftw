@@ -724,6 +724,90 @@ function test_puncture_attack_reaches_trap_behind_blocker() {
         'мина за блокировщиком НЕ активирована — луч до неё не дошёл');
 }
 
+/**
+ * T10. ★ Двойной урон по движущейся цели от SPLASH (регресс бага 11/2026):
+ * прямая атака берёт движущуюся цель по CUR-клетке, splash — по END-клетке,
+ * которая ВСЕГДА соседняя с CUR. Если щит жертвы поглотил удар целиком
+ * (dealt=0 → движение не прервано → STATUS всё ещё MOVING), splash добивал
+ * ту же цель вторично по END. Контракт: сущность, уже получившая урон прямой
+ * атакой (hit_ids в payload attack.resolved), splash не задевает.
+ */
+function test_splash_does_not_rehit_moving_target() {
+    echo "--- T10: SPLASH не бьёт повторно движущуюся цель прямой атаки ---\n";
+    $state = harness_build_state();
+    $pid = 'PLAYER1';
+    $vid = 'PLAYER3';
+
+    $p = &$state['players'][$pid];
+    $p['ROOM_ID'] = 'A1'; $p['CUR_POSITION_XY'] = '1,1'; $p['END_POSITION_XY'] = '1,1';
+    $p['STATUS'] = 'IDLE'; $p['ACTIONS'] = 3; $p['NEGATIVES'] = [];
+    $p['PASSIVES'] = ['SPLASH'];
+    $p['ATTACK'] = 4; $p['RANGE'] = 5;
+    unset($p);
+
+    $v = &$state['players'][$vid];
+    $v['ROOM_ID'] = 'A1'; $v['CUR_POSITION_XY'] = '3,1'; $v['END_POSITION_XY'] = '4,1';
+    $v['START_POSITION_XY'] = '3,1';
+    $v['STATUS'] = 'MOVING'; $v['NEGATIVES'] = []; $v['PASSIVES'] = [];
+    $v['RESISTANCE'] = 0;
+    $v['SHIELD'] = 20; $v['MAX_SHIELD'] = 20;
+    $hp_v = max(10, (int)$v['HITPOINTS']);
+    $v['HITPOINTS'] = $hp_v;
+    unset($v);
+
+    $res = combat_process_attack($state, $pid, 3, 1);
+    t_assert(($res['success'] ?? false) === true, 'атака по движущейся цели принята');
+    $v = $state['players'][$vid];
+    // Единственный удар: щит поглощает ровно 4 (ATTACK, сопротивление 0, без pierce).
+    // До фикса splash добавлял второй удар по END-клетке → щит 20 → 12.
+    t_assert((int)$v['SHIELD'] === 16,
+        'щит поглотил ровно один удар (20 → ' . $v['SHIELD'] . ', ожидалось 16)');
+    t_assert((int)$v['HITPOINTS'] === $hp_v, 'HP движущейся цели не тронут splash-ем');
+    t_assert($v['STATUS'] === 'MOVING', 'цель осталась MOVING (щит поглотил всё — движение не прервано)');
+}
+
+/**
+ * T11. ★ ARMORED + ARMOR_CRUSH на одном игроке (регресс бага 11/2026):
+ * раньше боец с обеими пассивками не работал ни в одну сторону — собственная
+ * ARMORED гасила своё пробитие. Контракт: pierce зависит только от наличия
+ * ARMOR_CRUSH у атакующего; ARMORED жертвы реагирует на ЧУЖОЙ ARMOR_CRUSH.
+ */
+function test_armor_crush_and_armored_same_owner() {
+    echo "--- T11: ARMOR_CRUSH+ARMORED у одного владельца не нейтрализуются ---\n";
+    $state = harness_build_state();
+    $pid = 'PLAYER1';
+    $vid = 'PLAYER3';
+
+    $p = &$state['players'][$pid];
+    $p['PASSIVES'] = ['ARMOR_CRUSH', 'ARMORED'];
+    unset($p);
+
+    t_assert(combat_should_pierce_resistance($state, ['type' => 'player', 'id' => $pid]) === true,
+        'боец с ARMOR_CRUSH+ARMORED пробивает сопротивление (нет взаимоотказа)');
+    t_assert(calculateDamage(4, 4, 5, true) === 4,
+        'pierce-урон игнорирует RESISTANCE цели (4, а не 2)');
+
+    // ARMORED жертвы против атаки с ARMOR_CRUSH → вдвое
+    $v = &$state['players'][$vid];
+    $v['PASSIVES'] = ['ARMORED'];
+    unset($v);
+    $payload = ['target_type' => 'player', 'target_id' => $vid, 'damage' => 10,
+                'source' => ['type' => 'player', 'id' => $pid]];
+    passives_on_mitigate($state, $payload);
+    t_assert($payload['damage'] === 5, 'ARMORED жертвы вдвое режет урон от носителя ARMOR_CRUSH (10 → 5)');
+
+    // ARMORED жертвы против обычной атаки (без чужого ARMOR_CRUSH) → не работает
+    $p = &$state['players'][$pid];
+    $p['PASSIVES'] = ['ARMORED'];
+    unset($p);
+    t_assert(combat_should_pierce_resistance($state, ['type' => 'player', 'id' => $pid]) === false,
+        'ARMORED без ARMOR_CRUSH не пробивает');
+    $payload2 = ['target_type' => 'player', 'target_id' => $vid, 'damage' => 10,
+                 'source' => ['type' => 'player', 'id' => $pid]];
+    passives_on_mitigate($state, $payload2);
+    t_assert($payload2['damage'] === 10, 'ARMORED жертвы игнорирует атаки без чужого ARMOR_CRUSH');
+}
+
 test_exit_transition();
 test_respawn_via_teleport();
 test_poll_room_filtering();
@@ -733,6 +817,8 @@ test_paralyzed_blocks_move_with_game_message();
 test_dot_expiry_does_not_stop_movement();
 test_death_clears_effects();
 test_puncture_attack_reaches_trap_behind_blocker();
+test_splash_does_not_rehit_moving_target();
+test_armor_crush_and_armored_same_owner();
 
 echo "\n=== ИТОГ: {$GLOBALS['__assertions']} проверок, отказов: {$GLOBALS['__failures']} ===\n";
 exit($GLOBALS['__failures'] > 0 ? 1 : 0);

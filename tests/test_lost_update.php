@@ -70,4 +70,20 @@ $ack = world_action_ack_get('p1', 'act_1');
 check('ACK: round-trip сохранён', is_array($ack) && $ack['success'] === true);
 check('ACK: неизвестный id -> null', world_action_ack_get('p1', 'nope') === null);
 
+// 5) Резерв action_id (гонка ретрая с «висящим» оригиналом → двойной урон)
+check('RESERVE: первый резерв проходит', world_action_ack_reserve('p1', 'act_2') === 'reserved');
+check('RESERVE: параллельный дубликат отвергнут (pending)', world_action_ack_reserve('p1', 'act_2') === 'pending');
+check('RESERVE: завершённый ack не блокируется', world_action_ack_reserve('p1', 'act_1') === 'reserved');
+world_action_ack_release('p1', 'act_2');
+check('RELEASE: после снятия резерв снова проходит', world_action_ack_reserve('p1', 'act_2') === 'reserved');
+world_action_ack_set('p1', 'act_2', ['success' => true, 'message' => 'done', 'version' => world_version()]);
+check('RELEASE+SET: pending заменён завершённым ack',
+    (world_action_ack_get('p1', 'act_2')['success'] ?? false) === true);
+$redis->hSet(REDIS_ACTION_ACKS, 'p1|act_3', json_encode(['success' => false, 'pending' => true, 'ts' => time() - ACTION_ACK_PENDING_STALE - 5]));
+check('RESERVE: протухший pending (сбой процесса) перехватывается', world_action_ack_reserve('p1', 'act_3') === 'reserved');
+world_action_ack_release('p1', 'act_3');
+world_action_ack_release('p1', 'act_1'); // завершённый НЕ должен быть удалён
+check('RELEASE: завершённый ack не удаляется',
+    (world_action_ack_get('p1', 'act_1')['success'] ?? false) === true);
+
 exit($fail === 0 ? 0 : 1);
