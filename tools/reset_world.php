@@ -120,7 +120,7 @@ try {
     $pipe->set(REDIS_NPCS, $enc($state['npcs']));
     $pipe->set(REDIS_ROOM, $enc($state['room'] ?? []));
     // turn_time — int (round-trip регрессия: JSON-литерал «1234» обнулял дедлайн
-    // хода, и poll продвигал ход каждый тик).
+    // хода, и тикер продвигал ход каждый виток).
     $pipe->set(REDIS_TURN_TIME, (string)(int)$state['turn_time']);
     $pipe->set(REDIS_PROJECTILES, $enc($state['projectiles']));
     $pipe->set(REDIS_LOG, $enc($state['log']));

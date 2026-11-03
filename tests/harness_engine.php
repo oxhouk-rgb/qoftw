@@ -283,44 +283,31 @@ function test_respawn_via_teleport() {
 
 // ------------------------------------------------------------------ T3
 /**
- * poll.php — HTTP-эндпоинт: при require сразу исполняет long-poll цикл и
- * завершает процесс (exit). Для юнит-теста извлекаем текст функции
- * build_poll_response и объявляем её в отдельном namespace, подменяя
- * movement_effective_range заглушкой (шиной пассивок в этом тесте проверяет
- * сам сервер на боевом прогоне).
+ * engine/snapshot.php — сборщик снапшотов (бывш. build_poll_response из
+ * удалённого poll.php): объявлен глобально через bootstrap, тестируется
+ * напрямую (тот же код, что исполняет ticker при публикации в Centrifugo).
  */
 function test_poll_room_filtering() {
-    echo "--- T3: poll отдаёт только текущую комнату игрока ---\n";
-    if (!class_exists('TestPollNs\\StubHooks', false)) {
-        $src = file_get_contents(__DIR__ . '/../php/poll.php');
-        $start = strpos($src, 'function build_poll_response');
-        t_assert($start !== false, 'poll.php: функция build_poll_response найдена');
-        if ($start === false) return;
-        // Вырезаем текст функции: от объявления до строки '}' в нулевом отступе
-        $end = strpos($src, "\n}", $start);
-        t_assert($end !== false, 'poll.php: конец функции найден');
-        if ($end === false) return;
-        $fn_src = substr($src, $start, $end - $start + 2);
-        eval("namespace TestPollNs; function rules_client_payload(){return [];} function movement_effective_range(\$s,\$p){return 5;} function engine_check_victory(\$s){return ['victory'=>false];} " . $fn_src);
-    }
+    echo "--- T3: снапшот отдаёт только текущую комнату игрока ---\n";
+    t_assert(function_exists('build_snapshot_response'), 'snapshot.php: build_snapshot_response объявлена');
     $state = harness_build_state();
-    world_save($state); // состояние — в фейковый Redis (как делает action/poll цикл)
+    world_save($state); // состояние — в фейковый Redis (как делает action/ticker)
 
-    $resp = \TestPollNs\build_poll_response($state, 1, 'PLAYER1');
-    t_assert(($resp['room_id'] ?? '') === 'A1', 'poll(PLAYER1): room_id = A1');
-    t_assert(($resp['room']['room_id'] ?? '') === 'A1', 'poll(PLAYER1): карта — A1, а не legacy B1');
+    $resp = build_snapshot_response($state, 1, 'PLAYER1');
+    t_assert(($resp['room_id'] ?? '') === 'A1', 'snapshot(PLAYER1): room_id = A1');
+    t_assert(($resp['room']['room_id'] ?? '') === 'A1', 'snapshot(PLAYER1): карта — A1, а не legacy B1');
     $foreign = array_filter($resp['npcs'] ?? [], function ($e) { return ($e['ROOM_ID'] ?? '') !== 'A1'; });
-    t_assert(count($foreign) === 0, 'poll(PLAYER1): ни одного NPC чужой комнаты');
+    t_assert(count($foreign) === 0, 'snapshot(PLAYER1): ни одного NPC чужой комнаты');
     $foreign_obj = array_filter($resp['objects'] ?? [], function ($e) { return ($e['ROOM_ID'] ?? '') !== 'A1'; });
-    t_assert(count($foreign_obj) === 0, 'poll(PLAYER1): ни одного объекта чужой комнаты');
+    t_assert(count($foreign_obj) === 0, 'snapshot(PLAYER1): ни одного объекта чужой комнаты');
     $with_range = array_filter($resp['players'] ?? [], function ($p) { return isset($p['MOVE_RANGE']); });
-    t_assert(count($with_range) === count($resp['players'] ?? []), 'poll: у всех игроков есть MOVE_RANGE');
+    t_assert(count($with_range) === count($resp['players'] ?? []), 'snapshot: у всех игроков есть MOVE_RANGE');
     $foreign_trap = array_filter($resp['traps'] ?? [], function ($e) { return ($e['ROOM_ID'] ?? '') !== 'A1'; });
-    t_assert(count($foreign_trap) === 0, 'poll(PLAYER1): ни одной ловушки чужой комнаты');
+    t_assert(count($foreign_trap) === 0, 'snapshot(PLAYER1): ни одной ловушки чужой комнаты');
 
-    // Неизвестный ?player= → legacy-карта (обратная совместимость debug-клиентов)
-    $resp_b1 = \TestPollNs\build_poll_response($state, 1, 'NPC_TEST_ABSENT');
-    t_assert(($resp_b1['room']['room_id'] ?? '') === 'B1', 'poll без игрока: legacy-карта B1');
+    // Неизвестный player → legacy-карта (обратная совместимость debug-клиентов)
+    $resp_b1 = build_snapshot_response($state, 1, 'NPC_TEST_ABSENT');
+    t_assert(($resp_b1['room']['room_id'] ?? '') === 'B1', 'snapshot без игрока: legacy-карта B1');
 }
 
 /**

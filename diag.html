@@ -23,7 +23,7 @@
     <h2>Ручные тесты</h2>
     <ul>
         <li><a href="php/init.php" target="_blank">init.php</a> - инициализация боя</li>
-        <li><a href="php/poll.php?v=0&player=PLAYER1" target="_blank">poll.php</a> - long polling (откроется с задержкой)</li>
+        <li>Транспорт снапшотов — Centrifugo (ws://127.0.0.1:8000), тик мира — демон: <code>php tools/ticker.php</code> (long polling удалён)</li>
     </ul>
     
     <script>
@@ -73,8 +73,37 @@
             const initData = await checkEndpoint('php/init.php', 'init.php (инициализация)');
             
             if (initData && initData.success) {
-                // Проверяем poll.php
-                await checkEndpoint('php/poll.php?v=0&player=PLAYER1', 'poll.php (long polling)');
+                if (initData.warning) {
+                    addResult('info', 'init.php warning', initData.warning);
+                }
+
+                // Проверяем доступность Centrifugo (WebSocket-транспорт снапшотов)
+                await new Promise(function (resolve) {
+                    var settled = false;
+                    var done = function (status, title, details) {
+                        if (settled) return; settled = true;
+                        addResult(status, title, details); resolve();
+                    };
+                    try {
+                        var ws = new WebSocket('ws://127.0.0.1:8000/connection/websocket');
+                        var timer = setTimeout(function () {
+                            try { ws.close(); } catch (e) {}
+                            done('fail', 'Centrifugo (ws://127.0.0.1:8000) - нет ответа за 4 с',
+                                'Запустите centrifugo -c config.json');
+                        }, 4000);
+                        ws.onopen = function () {
+                            clearTimeout(timer); ws.close();
+                            done('ok', 'Centrifugo WebSocket - доступен');
+                        };
+                        ws.onerror = function () {
+                            clearTimeout(timer);
+                            done('fail', 'Centrifugo WebSocket - недоступен',
+                                'Запустите centrifugo -c config.json');
+                        };
+                    } catch (err) {
+                        done('fail', 'Centrifugo WebSocket - ошибка', err.message);
+                    }
+                });
                 
                 // Проверяем action.php
                 try {

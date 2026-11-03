@@ -31,7 +31,7 @@
  * фундамент (эндпоинт + карточка + CAS-запись) остаётся тем же.
  *
  * ★ КОНКУРЕНТНОСТЬ
- * Запись бойца — CAS по версии мира (world_save_cas): параллельный тик poll.php
+ * Запись бойца — CAS по версии мира (world_save_cas): параллельный тик тикера
  * или чужое подключение не затираются. При гонке запрос перечитывает мир
  * (rebase), заново проверяет дубликаты/слоты и повторяет запись (до 3 попыток).
  * Повторный вход того же uid идемпотентен: боец уже в мире — отдаём его id без
@@ -252,6 +252,10 @@ try {
         }
         if ($existing_by_uid !== null) {
             $player_id = $existing_by_uid;
+            $world_version_now = (int)$base_version;
+            // Rejoin тоже публикует мир: подключившийся клиент увидит состояние
+            // сразу (иначе — не позже heartbeat-пауки тикера).
+            battle_publish_world($state, $world_version_now);
             closeRedis();
             ob_end_clean();
             header('Content-Type: application/json; charset=utf-8');
@@ -260,7 +264,8 @@ try {
                 'rejoin' => true,
                 'player_id' => $player_id,
                 'message' => 'Игрок уже в бою: ' . $state['players'][$player_id]['NICKNAME'],
-                'version' => (int)$base_version,
+                'version' => $world_version_now,
+                'ws' => centrifugo_ws_payload($player_id),
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -329,6 +334,10 @@ try {
         [$saved, $fresh_state] = world_save_cas($state, $base_version);
         if ($saved) {
             $new_version = world_version();
+            // Публикация: остальные бойцы видят новичка мгновенно, а
+            // подключившийся — весь мир (до подписки клиента сообщение уйдёт в
+            // history/первый heartbeat, но ранняя публикация дешевле ожидания).
+            battle_publish_world($fresh_state, $new_version);
             closeRedis();
             ob_end_clean();
             header('Content-Type: application/json; charset=utf-8');
@@ -341,6 +350,7 @@ try {
                 'position' => $player['CUR_POSITION_XY'],
                 'message' => 'Персонаж размещён в бою',
                 'version' => $new_version,
+                'ws' => centrifugo_ws_payload($player_id),
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }

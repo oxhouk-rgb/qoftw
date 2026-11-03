@@ -29,7 +29,8 @@ $rules_define('MOVE_SPEED', 3);          // клеток в секунду (пл
 
 // Ход мира
 $rules_define('TURN_DURATION', 5);       // секунд между processTurnStart
-$rules_define('LONG_POLL_TIMEOUT', 25);  // секунд таймаут long polling
+// LONG_POLL_TIMEOUT удалён (переход на Centrifugo, ноябрь 2026): long polling
+// больше не транспорт; ритм тика задаёт tools/ticker.php (--interval).
 
 // Анимации
 $rules_define('DEATH_ANIM_SECONDS', 1);  // DEATH -> DECAY
@@ -63,7 +64,7 @@ function rules_turn_formula($cur_x, $target_x, $current_turn) {
 }
 
 /**
- * Пакет правил для отправки клиенту (поле "rules" в ответах init/poll).
+ * Пакет правил для отправки клиенту (поле "rules" в ответах init/тик).
  */
 function rules_client_payload() {
     return [

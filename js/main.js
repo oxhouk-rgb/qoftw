@@ -7,7 +7,8 @@
 //      этом не сбрасывается и живого боя не касается;
 //   2) «Подключиться к бою» → joinGame(card): POST join.php (валидация карточки,
 //      слот-спавн, CAS-запись бойца в мир);
-//   3) успех join → enterBattle(player_id): GET init.php + buildGrid + startPolling.
+//   3) успех join → enterBattle(player_id): GET init.php + buildGrid + startRealtime
+//      (Centrifugo-подписка на персональный канал, см. js/realtime.js).
 // init намеренно НЕ вызывается автоматически из join.php: сервер остаётся
 // единственной точкой сборки мира, а клиентский шаг явен и диагностируем.
 

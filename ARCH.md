@@ -14,9 +14,14 @@
 
 - **Бэкенд**: чистый PHP 8.0+ (без фреймворков) + **Redis** (расширение phpredis). Вся игровая
   логика и все расчёты — только на сервере.
-- **Фронтенд**: статические HTML/CSS/vanilla JS. Роли JS строго три: *polling*, *рендер*, *ввод*.
+- **Фронтенд**: статические HTML/CSS/vanilla JS. Роли JS строго три: *приём снапшотов*, *рендер*, *ввод*.
+- **Транспорт (решение автора, ноябрь 2026)**: long polling **удалён** — доставка снапшотов через
+  **Centrifugo** (WebSocket push, персональный канал `battle:<PLAYER_ID>`); тик мира — отдельный
+  демон `tools/ticker.php` (раньше его выполнял цикл poll.php). Публикации — HTTP API Centrifugo
+  из PHP (`engine/publish.php`, fail-soft).
 - **Табу**: ❌ React/Vue/Angular, ❌ Node.js/npm/сборщики, ❌ логика игры на клиенте,
-  ❌ WebSocket/SSE вместо long polling.
+  ❌ игровые состояния в файлах вместо Redis, ❌ PHP-фреймворки.
+  (Прежнее «❌ WebSocket вместо long polling» снято решением автора — см. этот блок.)
 - Состояние боя живёт **только в Redis** под префиксом `battle:`; файловое состояние отсутствует.
 - Живой клиент — `game.html` + `js/*.js` (модули config/state/utils/grid/path/animation/render/input/net/main) + `css/game.css`. Ранние relics песочничной
   React-сборки удалены из репозитория.
@@ -24,7 +29,8 @@
 ## 2. Карта компонентов
 
 Архитектура двухслойная: тонкие HTTP-эндпоинты → движок (`engine/` ядро + `systems/` механики),
-связанные событийной шиной. Стек не менялся: чистый PHP + Redis + vanilla JS + long polling.
+связанные событийной шиной. Стек: чистый PHP + Redis + vanilla JS + **Centrifugo** (транспорт
+снапшотов) + **демон тика** `tools/ticker.php` (long polling удалён, решение автора 11/2026).
 
 ```
 Клиент (браузер, вкладка = игрок)              Сервер (PHP-FPM/Apache/Nginx)         Хранилище
@@ -32,18 +38,25 @@
 │ game.html  — точка входа       │ ─────▶ │ init.php   — проверка мира /     │◀──reset────┐
 │  (экран настройки карточки +   │        │  reset=1 → world_reset (тонкий)  │           ▼
 │   игровой экран)               │   POST ├──────────────────────────────────┤      ┌──────────┐
-│ js/*.js    — poll/render/input │ ─────▶ │ join.php   — подключение игрока: │      │  Redis   │
-│ css/game.css — визуал/анимации │   POST │  карточка → спавн бойца (CAS)    │      │ battle:* │
-│ diag.html  — диагностика       │ ─────▶ │ action.php — валидация +         │      └──────────┘
-└───────────────────────────────┘        │            роутинг move/attack/  │           ▲
-        ▲                                │            ability (тонкий)      │           ▲
-        │ GET poll.php?v=N&player=ID     ├──────────────────────────────────┤           ▲
-        └─────────────────────────────── │ poll.php — long-poll + server    │           │
-                                         │            clock (turn_tick)     │           │
-                                         ├──────────────────────────────────┤           │
-                                         │ engine/bootstrap.php — ТОЧКА      │           │
-                                         │  СБОРКИ: require систем + hook()  │           │
-                                         │  ├── engine/rules.php   (константы│           │
+│ js/*.js    — realtime/render/  │ ─────▶ │ join.php   — подключение игрока: │      │  Redis   │
+│   input (net.js — отправка     │   POST │  карточка → спавн бойца (CAS)    │      │ battle:* │
+│   действий), realtime.js —     │        │  + публикация мира всем          │      └──────────┘
+│   подписка Centrifugo          │        │ action.php — валидация +         │           ▲
+│ css/game.css — визуал/анимации │   POST │            роутинг move/attack/  │           ▲
+│ diag.html  — диагностика       │ ─────▶ │            ability (тонкий)      │           ▲
+└──────────┬────────────────────┘        ├──────────────────────────────────┤           ▲
+           │ WS subscribe                 │ tools/ticker.php — ДЕМОН ТИКА:  │           │
+           │ battle:<PLAYER_ID>           │  world_tick_once() каждый виток  │           │
+           ▼                            │  (turn_tick + CAS-save) ──────────┼───────────┘
+┌──────────────────────┐                ├──────────────────────────────────┤
+│ Centrifugo (:8000)    │◀── HTTP API ── │ engine/publish.php — публикация  │
+│ push снапшотов        │   publish      │  снапшотов + JWT-токены (fail-   │
+└──────────────────────┘                │  soft); engine/snapshot.php —    │
+                                        │  build_snapshot_response          │
+                                        ├──────────────────────────────────┤
+                                        │ engine/bootstrap.php — ТОЧКА      │
+                                        │  СБОРКИ: require систем + hook()  │
+                                        │  ├── engine/rules.php   (константы│           │
                                          │  ├── engine/geometry.php (коорд.) │           │
                                          │  ├── engine/events.php  (шина)    │           │
                                          │  ├── engine/world.php ────────────┼───────────┘
@@ -73,10 +86,10 @@
 | Файл | Роль | Ключевые функции |
 |------|------|------------------|
 | `config.php` | Только инфраструктура: подключение Redis, JSON-ответы, логи. **Игровые константы удалены отсюда** (владелец — `engine/rules.php`); функции `parseXY/formatXY/isValidPosition` обёрнуты в `function_exists` (владелец — `engine/geometry.php`) | `getRedis()`, `addLog()`, `jsonResponse()/jsonError()`, `setCorsHeaders()` |
-| `init.php` | Тонкий эндпоинт с ДВУМЯ режимами. **Обычный вход (идемпотентен):** проверяет готовность мира в Redis (`battle:version > 0`, иначе 503 с подсказкой `php tools/reset_world.php`), пропускает состав бойцов через `world_builder_player_errors()`, догружает недостающие карты комнат (`room_get`), пересчитывает `THREAT_ZONE` NPC и вызывает `world_save()` **только если реально что-то изменил** (иначе ложно разбудил бы все long-poll). **Явный перезапуск сессии** (`?reset=1` или POST `{"reset":true}`): `world_reset_session()` — сборка изначального мира + запись (см. `engine/world_reset.php`); при ошибках данных мир НЕ тронут, ответ 500 со списком ошибок. Отдаёт клиенту `rules` + реестры abilities/passives/effects/autonomous_objects | вызывается клиентом после успешного `join.php` (шаг инициализации боя); `?reset=1` — вручную при перезапуске сессии (состав бойцов после reset — пустой, до подключений через join.php) |
-| `poll.php` | Тонкий эндпоинт: `set_time_limit`, `turn_tick($state)` для ЛЮБОГО запроса (не только с `?player=`), `turn_check_advance`, long-poll по версии; без изменений — полный snapshot; в ответе поле `rules`. Ответ — плоский JSON (без обёртки `data`) | `require bootstrap.php` |
+| `init.php` | Тонкий эндпоинт с ДВУМЯ режимами. **Обычный вход (идемпотентен):** проверяет готовность мира в Redis (`battle:version > 0`, иначе 503 с подсказкой `php tools/reset_world.php`), пропускает состав бойцов через `world_builder_player_errors()`, догружает недостающие карты комнат (`room_get`), пересчитывает `THREAT_ZONE` NPC и вызывает `world_save()` **только если реально что-то изменил** (иначе ложно разбудил бы подписчиков лишней публикацией). **Предупреждает** (поле `warning`, не фатал) об отсутствии флага `seeded` и о молчании демона тика (`battle:ticker_beat` старше 5 с). **Явный перезапуск сессии** (`?reset=1` или POST `{"reset":true}`): `world_reset_session()` — сборка изначального мира + запись (см. `engine/world_reset.php`); при ошибках данных мир НЕ тронут, ответ 500 со списком ошибок. Отдаёт клиенту `rules` + реестры abilities/passives/effects/autonomous_objects | вызывается клиентом после успешного `join.php` (шаг инициализации боя); `?reset=1` — вручную при перезапуске сессии (состав бойцов после reset — пустой, до подключений через join.php) |
+| `poll.php` | ★ **УДАЛЁН** (переход на Centrifugo, 11/2026). Его обязанности разделены: тик мира — `tools/ticker.php` (демон, вызывает `world_tick_once` из `engine/snapshot.php`), доставка — `engine/publish.php` (push снапшотов в канал `battle:<PLAYER_ID>`), сборка ответа — `build_snapshot_response()` (контракт flat-снапшота сохранён 1-в-1) | — |
 | `action.php` | Тонкий эндпоинт: предварительная валидация (жив ли, не заблокирован ли `effects_blocks()`, есть ли способность/AP) → роутинг `move/attack/ability/special` в systems; ошибки → JSON 400, не fatal | `require bootstrap.php` |
-| `join.php` | ★ **Подключение игрока к бою (Этап 1: имитация данных с аккаунта)** (POST JSON — карточка персонажа: `uid`, `nickname`, `stats` (обычные целые 1..10; SHIELD 0..10, RESISTANCE 0..9; ACTIONS 1..3), `abilities` (ровно 3 из реестра), `passives` (0..5 из реестра)). Сервер НЕ доверяет клиенту: мировая валидация карточки (`world_builder_player_errors` + `world_build_player_from_payload`) + собственные проверки; выделяет слот спавна (uid 1..4 → комнаты A1/A5/E1/E5); запись бойца — **CAS по версии мира** (`world_save_cas`, до 3 rebase-попыток против гонки с тиком poll.php/чужим подключением); повторный вход того же uid идемпотентен (`rejoin:true`, отдаётся существующий `player_id`); пятый игрок при занятых слотах → HTTP 409 (поверхностное решение известной проблемы отсутствия лобби). Ответ: `{success, player_id, slot, rejoin?}`. Альянсы: `ALLY='NONE'` (FFA) | вызывается формой настройки `game.html` (`js/net.js: joinGame()`) перед стартом polling |
+| `join.php` | ★ **Подключение игрока к бою (Этап 1: имитация данных с аккаунта)** (POST JSON — карточка персонажа: `uid`, `nickname`, `stats` (обычные целые 1..10; SHIELD 0..10, RESISTANCE 0..9; ACTIONS 1..3), `abilities` (ровно 3 из реестра), `passives` (0..5 из реестра)). Сервер НЕ доверяет клиенту: мировая валидация карточки (`world_builder_player_errors` + `world_build_player_from_payload`) + собственные проверки; выделяет слот спавна (uid 1..4 → комнаты A1/A5/E1/E5); запись бойца — **CAS по версии мира** (`world_save_cas`, до 3 rebase-попыток против гонки с тиком тикера/чужим подключением); повторный вход того же uid идемпотентен (`rejoin:true`, отдаётся существующий `player_id`); пятый игрок при занятых слотах → HTTP 409 (поверхностное решение известной проблемы отсутствия лобби). Ответ: `{success, player_id, slot, rejoin?, ws:{url, channel, token, expires_in}}` — `ws.token` JWT Centrifugo на персональный канал; успех/rejoin публикуют мир всем бойцам. Альянсы: `ALLY='NONE'` (FFA) | вызывается формой настройки `game.html` (`js/net.js: joinGame()`) перед подключением к Centrifugo |
 | `battle.php` | **Фасад обратной совместимости**: подключает `engine/rules.php` + `bootstrap.php`, содержит делегаты со всеми старыми именами (`processMove`, `processAttack`, `updateMovements`, `checkVictory`, …). Новый код здесь не писать | legacy-алиасы |
 | `debug.php` | Диагностика новой структуры: PHP/Redis, наличие engine/+systems/, `php -l` модулей (если CLI доступен), загрузка фасада, вывод реестров, состав мира в Redis (**только чтение**, живой бой не перезаписывает). Сброс мира здесь отсутствует сознательно — он выполняется через `tools/reset_world.php` / `init.php?reset=1` | standalone-страница |
 
@@ -84,12 +97,14 @@
 
 | Файл | Роль | Ключевые функции |
 |------|------|------------------|
-| `rules.php` | **Единый источник констант мира** (GRID 16×12, MAX_MOVE_DISTANCE=5, MOVE_SPEED=3, TURN_DURATION=5, SHIELD_REGEN_PER_TURN=1, LONG_POLL_TIMEOUT=25, тайминги анимаций) через guard `if (!defined(...)) define(...)` — порядок загрузки файлов не может уронить процесс | `rules_turn_formula()` (канон направления спрайта TURN), `rules_client_payload()` (правила в ответах init/poll) |
+| `rules.php` | **Единый источник констант мира** (GRID 16×12, MAX_MOVE_DISTANCE=5, MOVE_SPEED=3, TURN_DURATION=5, SHIELD_REGEN_PER_TURN=1, тайминги анимаций) через guard `if (!defined(...)) define(...)` — порядок загрузки файлов не может уронить процесс. `LONG_POLL_TIMEOUT` удалён с transport-миграцией (ритм тика — `--interval` тикера) | `rules_turn_formula()` (канон направления спрайта TURN), `rules_client_payload()` (правила в ответах init и в каждом снапшоте) |
 | `geometry.php` | Чистые функции координат, без состояния | `parseXY/formatXY/isValidPosition/manhattan/inRadius/calculatePath/adjacentCells/cellsInRadius/directionStep` |
 | `events.php` | Шина событий: `hook(event, fn, priority)` с детерминированным порядком, `emit()` (fact-события), `emitReduce()` (query/reduser-события; **payload передаётся по ссылке** — слушатели мутируют оригинал, а не копию). Канонический список событий — в шапке файла | `hook()`, `emit()`, `emitReduce()` |
 | `world.php` | **Единственный владелец хранилища**: все чтения/записи Redis идут через него; инкремент `REDIS_VERSION` централизован в `world_save()`; дедупликация записей; виртуальные часы движения — отдельный ключ `battle:world_move_now` (обновляется каждый тик без инкремента версии); журнал ack для идемпотентности действий — hash `battle:action_acks` | `world_load/world_save/world_init/world_log/world_version`, `world_action_ack_get/set` (ретраи `action.php` отдают сохранённое подтверждение вместо повторного применения); константа ключа `REDIS_WORLD_MOVE_NOW` определяется здесь |
-| `turn.php` | Оркестратор тика хода: movement → death chain → projectiles → attack reset → npc statuses → effects tick; самовосстанавливающийся инвариант STATUS↔NEGATIVES (снятие истёкших дебаффов, в т.ч. STUNNED); защита от `turn_time=0` | `turn_tick()` (вызывается каждым poll-запросом), `turn_check_advance()`, `turn_start()` (ACTIONS/shield regen + emit `turn.start`) |
-| `bootstrap.php` | Точка сборки: require всех систем + регистрация слушателей в фиксированном порядке (combat → passives → effects → movement → objects → turn) + `engine_check_victory` | `*::register_hooks()` вызываются отсюда |
+| `turn.php` | Оркестратор тика хода: movement → death chain → projectiles → attack reset → npc statuses → effects tick; самовосстанавливающийся инвариант STATUS↔NEGATIVES (снятие истёкших дебаффов, в т.ч. STUNNED); защита от `turn_time=0` | `turn_tick()` (вызывается каждым витком `world_tick_once()` из тикера), `turn_check_advance()`, `turn_start()` (ACTIONS/shield regen + emit `turn.start`) |
+| `bootstrap.php` | Точка сборки: require всех систем + регистрация слушателей в фиксированном порядке (combat → passives → effects → movement → objects → turn) + require транспортного слоя (snapshot/publish) + `engine_check_victory` | `*::register_hooks()` вызываются отсюда |
+| `snapshot.php` | ★ Транспортно-нейтральная сборка состояния: `build_snapshot_response()` (бывш. build_poll_response из poll.php — flat-контракт без обёртки `data`, комната запросившего бойца, MOVE_RANGE, server_now) + `world_tick_once()` (ОДИН виток тика: load → guard turn_time → turn_tick → CAS-save; гонка = null-возврат, виток повторяется) | `build_snapshot_response(state, version, player_id)`, `world_tick_once()` |
+| `publish.php` | ★ Centrifugo-слой доставки (замена long polling): JWT user-токены (HS256, claim `channels` — только свой канал), публикация снапшотов через HTTP API (`stream context`, без curl), **fail-soft** (сбой шины не роняет тик/действие/join), метка живости тикера `battle:ticker_beat`; env `CENTRIFUGO_SINK_FILE` — JSONL-дам публикаций для тестов; константы `CENTRIFUGO_*` (guard + env) | `centrifugo_user_token()`, `centrifugo_ws_payload()`, `centrifugo_publish()`, `battle_publish_world()`, `battle_channel()`, `ticker_beat_touch/age()` |
 | `world_builder.php` | ★ **Единственный сборщик ИЗНАЧАЛЬНОГО состояния мира** (ответ на «где старт, если хранилище — Redis?»): бойцы из `data/initial_snapshot.json` + расстановка объектов/ловушек/NPC из карт комнат + характеристики из `getObjectTemplates()` + расчёт `THREAT_ZONE`. Чистая функция (state не мутируется, ничего не пишет). Публичные алиасы `player_defaults()` / `normalize_player()` — чтобы валидация состава не жила во втором месте | `world_build_initial()`, `world_builder_normalize_player(raw, room_map, keep_stored)`, `world_builder_player_errors()`, `world_builder_read_snapshot()`, `world_build_player_from_payload()` |
 | `world_reset.php` | ★ Перезапуск игровой сессии: сборка (`world_reset_build`) + запись (`world_reset_write`: MULTI → flushDB → все секции + `room:list`/`room:<ID>` → `version=1` → `seeded`). Один код для CLI и HTTP — правила сборки не имеют права дублироваться | `world_reset_build($snapshot_path)`, `world_reset_write(&$state)`, `world_reset_session()` |
 
@@ -104,7 +119,7 @@
 | `targeting.php` | Универсальный доступ к сущностям + правила проходимости клеток | `resolveEntity/hostile_to/all_entities`; AoE бьёт игроков, NPC и объекты; `is_cell_passable()` (стены/целые объекты/живые NPC блокируют), `is_player_at_position()` (DEATH/DECAY/REMOVED клетку не занимают) |
 | `abilities.php` | Реестр способностей (формат данных не менялся) + исполнение через единые сервисы combat/movement/effects | `getAbilityDefinitions`, `applyAbility` |
 | `objects.php` | NPC (зоны угрозы, LOS — пересчёт каждый ход) и ловушки; урон через единую цепочку `combat_apply_damage`; жёсткий фильтр целей: DEATH/DECAY не атакуется. Плюс **реестр шаблонов типов** — серверный источник характеристик объектов/ловушек/NPC (нужен и сборщику изначального мира, и будущим spawn-объектам способностей) | `getObjectTemplates()` (SMALL_BARRELS/LAND_MINE/DEFAULT_TURRET: category, image, defaults), `objectEntityDefaults(category)`, `objects_build_entity(type, overrides, room_id)`, `objects_layout_from_room(card, room_id)` (расстановка из секций карты; неизвестные `IMAGE` молча пропускаются), `objects_spawn_entity(&$state, ...)` (задел под способности; сохранение — на вызывающем), `getAutonomousObjectDefinitions()` — проекция шаблонов для клиента, `calculateThreatZone`, `objects_has_line_of_sight` (legacy-алиас `hasLineOfSightNPC` — в фасаде battle.php), слушатель `turn.start` |
-| `rooms.php` | Мультикомнатный мир: сущности и игроки привязаны к комнате полем `ROOM_ID`; координатные сетки комнат ПЕРЕКРЫВАЮТСЯ (одна клетка x,y живёт в нескольких комнатах), поэтому ИЗОЛЯЦИЯ КОМНАТ — инвариант: любая проверка позиции (цели, лучи, AoE, зоны угрозы, ловушки, занятость клеток, проходимость) обязана фильтровать по `ROOM_ID`. Карта комнаты грузится лениво из `data/<ID>.json` в `state['rooms']` (в Redis лежат только «оседлавшие» мир комнаты); двери (`exits["x,y"]=КУДА`) — постоянный триггер вида LAND_MINE: наступил → мгновенный телепорт; `room.changed` — fact-событие шины после переноса | `room_get`, `room_of_player`, `room_cell_blocked`, `room_candidate_cells`, `room_find_spawn_cell`, `rooms_teleport(reason: exit/respawn)`, `rooms_check_exit_trigger`; poll отдаёт карту/объекты/ловушки/NPC только комнаты запросившего `?player=`; клиент (`js/grid.js`/`js/render.js`/`js/path.js`) фильтрует отрисовку и проверки путей (`inCurrentRoom`, `rebuildGrid`, `purgeOutOfViewRoomEntities`) строго по `ROOM_ID` рисуемой комнаты — иначе «урон по пустой клетке задевает бойца в другой комнате» |
+| `rooms.php` | Мультикомнатный мир: сущности и игроки привязаны к комнате полем `ROOM_ID`; координатные сетки комнат ПЕРЕКРЫВАЮТСЯ (одна клетка x,y живёт в нескольких комнатах), поэтому ИЗОЛЯЦИЯ КОМНАТ — инвариант: любая проверка позиции (цели, лучи, AoE, зоны угрозы, ловушки, занятость клеток, проходимость) обязана фильтровать по `ROOM_ID`. Карта комнаты грузится лениво из `data/<ID>.json` в `state['rooms']` (в Redis лежат только «оседлавшие» мир комнаты); двери (`exits["x,y"]=КУДА`) — постоянный триггер вида LAND_MINE: наступил → мгновенный телепорт; `room.changed` — fact-событие шины после переноса | `room_get`, `room_of_player`, `room_cell_blocked`, `room_candidate_cells`, `room_find_spawn_cell`, `rooms_teleport(reason: exit/respawn)`, `rooms_check_exit_trigger`; снапшот отдаёт карту/объекты/ловушки/NPC только комнаты бойца (параметр `player_id` в `build_snapshot_response`); клиент (`js/grid.js`/`js/render.js`/`js/path.js`) фильтрует отрисовку и проверки путей (`inCurrentRoom`, `rebuildGrid`, `purgeOutOfViewRoomEntities`) строго по `ROOM_ID` рисуемой комнаты — иначе «урон по пустой клетке задевает бойца в другой комнате» |
 
 ### Клиент (`js/*.js`, модули, vanilla JS; был единый game.js на 1724 строки — разбит)
 
@@ -112,15 +127,17 @@
 `utils.js` (showNotification, парсеры), `grid.js` (buildGrid/rebuildGrid/findEntity/inCurrentRoom/purge*),
 `path.js` (isPathClear/isCellFreeForMove/hasLineOfSight), `animation.js` (previewTurn/applyTurnClass/*MoveAnimation),
 `render.js` (render/renderGrid/create*Entity/render*UI/checkVictory), `input.js` (onCellClick/showActionDialog),
-`net.js` (joinGame/initGame/startPolling/poll/nextActionId/sendAction + syncClock по серверному `server_now`), `main.js` (DOMContentLoaded — точка входа: экран настройки карточки → joinGame).
+`net.js` (joinGame/initGame/nextActionId/sendAction + syncClock по серверному `server_now`), `realtime.js` (startRealtime/handleRealtimeSnapshot/refreshRealtimeToken — подписка Centrifugo на канал `battle:<playerId>`, publication → syncClock+render; heartbeat-снапшот той же версии обновляет только таймер), `main.js` (DOMContentLoaded — точка входа: экран настройки карточки → joinGame).
+`js/vendor/centrifuge.min.js` — статический UMD-файл centrifuge-js 5 (globalThis.Centrifuge; без npm/сборщиков).
 Функции объявлены в глобальном скоупе обычными `<script>` — без сборщиков и ES-модулей (табу стека не нарушается).
 
 - `CONFIG.PHP_URL = 'php/'`, сетка 16×12 (`GRID_WIDTH/HEIGHT`), `CELL_SIZE=40` (дублирует серверные константы — см. §7; скорости клиента в `CONFIG` нет — анимация движения строится на временах хода `MOVE_START/END_TIME` из snapshot).
 - Жизненный цикл: **экран настройки карточки в `game.html`** (uid, ник, stats: обычные 1..10, SHIELD 0..10, RESISTANCE 0..9, ровно 3
   способности из реестра, 0–5 пассивов чекбоксами) → `joinGame(card)` (POST `join.php`, сервер
-  возвращает `player_id`) → `initGame(playerId)` (fetch `init.php`) → `startPolling()` → бесконечный
-  цикл `poll()` (`poll.php?v=<version>&player=<ID>`, следующий запрос через 100 мс после ответа,
-  retry через 2 c при ошибке). До подключения игрока мир пуст для бойцов: 0 игроков = 0 персонажей.
+  возвращает `player_id` + `ws`) → `initGame(playerId)` (fetch `init.php`) → `startRealtime()` →
+  подписка Centrifugo на `ws.channel` (персональный канал бойца); снапшоты приходят push-ем
+  (тик-демон + мгновенные публикации action/join). До подключения игрока мир пуст для бойцов:
+  0 игроков = 0 персонажей. ★ Требуется запущенные `centrifugo` и `php tools/ticker.php`.
 - Ввод: клик по клетке (`onCellClick`) открывает диалог действий (`showActionDialog`), кнопки
   способностей показываются по дальности; отправка — `sendAction()` (retry ×3 на 5xx/parse/network).
 - Рендер: `render(data)` — полный снимок → сетка, сущности, снаряды, UI (HP/щит/ACTIONS, таймер
@@ -173,11 +190,14 @@
 
 ```
 init.php ─┬─▶ engine/bootstrap.php           config.php (только Redis-коннект,
-poll.php  │   (единственная точка сборки:     JSON-хелперы, логи) ◀─ engine/world.php
-action.php│    require всех engine/*+systems/* +
-          │    hook-регистрации)
+action.php│   (единственная точка сборки:     JSON-хелперы, логи) ◀─ engine/world.php
+          │    require всех engine/*+systems/* +
+          │    hook-регистрации + snapshot/publish)
 battle.php┘── (фасад legacy-имён)
-join.php —— bootstrap.php + world_builder.php (карточка → боец, запись через world_save_cas)
+tools/ticker.php —— bootstrap.php (world_tick_once из engine/snapshot.php +
+                   battle_publish_world/ticker_beat_touch из engine/publish.php)
+join.php —— bootstrap.php + world_builder.php (карточка → боец, запись через world_save_cas,
+           публикация мира + ws-токен через engine/publish.php)
 debug.php —— свой путь диагностики (свой require bootstrap.php)
 
 ★ Перезапуск сессии (единственный путь, где мир СОБИРАЕТСЯ заново):
@@ -247,33 +267,39 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
 
 1. **join**: клиент → `POST php/join.php` (карточка персонажа с экрана настройки `game.html`) →
    серверная валидация + выделение слота спавна → `world_save_cas` (боец появляется в мире;
-   0 подключений = 0 бойцов) → ответ `{player_id}` → далее init.
+   0 подключений = 0 бойцов) → ответ `{player_id, ws:{url, channel, token, expires_in}}` →
+   далее init + подписка Centrifugo на `ws.channel` (персональный канал бойца).
+   Ответ join публикует мир всем бойцам (новичок виден сразу).
 2. **init**: клиент → `GET php/init.php` → проверка готовности мира в Redis + пересчёт
    THREAT_ZONE (идемпотентно, живой бой НЕ обнуляется). Перезапуск сессии — только явно:
    `GET php/init.php?reset=1` или CLI `php tools/reset_world.php` → `world_reset_build()`
    (сборка изначального состояния) → `world_reset_write()` (flushDB, version=1, метка `seeded`).
    Причина правки: старый flushDB на каждом входе терял бой между вкладками.
-3. **poll-loop** (`poll.php?v=<clientVersion>&player=<ID>`): сервер держит соединение ≤25 с
-   (`LONG_POLL_TIMEOUT`, `set_time_limit` снят), каждые 0.1 с: `world_load` → `turn_tick($state)`
-   (**для любого запроса, даже без `?player=`** — иначе эффекты залипают) → движение по «виртуальным
+3. **tick-loop** (`tools/ticker.php` — демон, НЕ HTTP): каждый виток ≤100 мс: `world_load` →
+   `world_tick_once()` (engine/snapshot.php: `turn_tick($state)` — движение по «виртуальным
    часам мира» с догоняющими тиками → death chain → projectiles → attack reset → npc statuses →
    effects tick (внутри хода) → пересчёт зон угрозы NPC после фазы движения
    (`objects_refresh_threat_zones`) → при `now-turn_time ≥ TURN_DURATION(5)` новый ход (`turn_check_advance` →
-   `turn_start` + emit `turn.start`: passives/effects/combat/objects-слушатели) → `world_save`
-   (incr version централизован в world_save; дедуп записей). Если version изменилась, отдаёт
-    **полный flat snapshot**
-    (`version, rules, server_now, room, room_id, grid, objects, traps, npcs, players, projectiles,
-    log[-30], turn_time, turn_duration, time_to_next_turn, victory`) — КЛЮЧИ ОТВЕТА НА ВЕРХНЕМ УРОВНЕ,
-    без обёртки `data` (клиентский `render(data)` читает `data.players` и т.д. напрямую;
-    исторический контракт). `server_now` — серверные часы на момент сборки ответа
-    (`microtime(true)`, та же шкала, что `MOVE_START/END_TIME`); клиент синхронизирует
-    локальные часы через `syncClock()` и интерполирует движение по ним (лечит «рывок на
-    финише» из-за сетевого RTT). `room/room_id/grid` — карта комнаты запросившего `?player=`
-   (без параметра — legacy-карта `state['room']`), объекты/ловушки/NPC также отфильтрованы
-   по её `ROOM_ID`. Иначе по таймауту отдаёт тот же snapshot с `timeout:true`.
+   `turn_start` + emit `turn.start`: passives/effects/combat/objects-слушатели) → CAS-`world_save`
+   (incr version централизован в world_save) → метка живости `battle:ticker_beat` (без версии) →
+   **публикация**: при смене версии ИЛИ не реже heartbeat 1 с — `battle_publish_world(state, version)`:
+   на каждого бойца собирается ЕГО снапшот (`build_snapshot_response`, прежний flat-контракт
+   poll-ответа: `version, rules, server_now, room, room_id, grid, objects, traps, npcs, players,
+   projectiles, log[-30], turn_time, turn_duration, time_to_next_turn, victory` — ключи на верхнем
+   уровне, без обёртки `data`) и публикуется в персональный канал `battle:<PLAYER_ID>` через
+   HTTP API Centrifugo (`engine/publish.php`, fail-soft: шина недоступна — мир живёт дальше,
+   клиент догонит следующим публикационным витком). `server_now` — серверные часы на момент
+   сборки снапшота (`microtime(true)`); клиент синхронизирует локальные часы через `syncClock()`
+   (RTT — ping/pong по WS, `state.wsRttMs`) и интерполирует движение по ним. `room/room_id/grid` —
+   карта комнаты бойца, объекты/ловушки/NPC отфильтрованы по её `ROOM_ID`; игроки — список целиком
+   (клиент рисует совпадающих по комнате). ★ Раньше этот цикл жил в php/poll.php (файл удалён):
+   мир тикал только пока клиенты держат long-poll; теперь тик не зависит от подключений, а
+   N клиентов ≠ N висящих PHP-процессов — бутылочное горлышко long polling снято.
 4. **action**: клиент → `POST php/action.php` (JSON) → предварительная валидация (жив/не CC/AP) →
-   функция systems мутирует `$state` (by-ref) → `world_save` (incr version) →
-   все зависшие poll мгновенно отдают новый мир. Ошибки — JSON 400, не fatal.
+   функция systems мутирует `$state` (by-ref) → `world_save_cas` (incr version) →
+   `battle_publish_world` — все подписчики получают новый мир мгновенно (замена «зависшие poll
+   отдают сразу»). Публикация fail-soft: сбой шины не отменяет сохранённое действие — тикер
+   донесёт состояние следующим витком. Ошибки — JSON 400, не fatal.
 5. **Контракты**: любой mutate состояния **обязан** закончиться сохранением через `world_save`
    (он сам делает incr версии; прямой `incr` в стороннем коде — антипаттерн). Забыли save →
    клиенты «зависнут на старом мире».
@@ -289,10 +315,14 @@ php/systems/: effects, targeting, passives, movement, combat, abilities, objects
 `room:list` (JSON-массив ID комнат, реально «оседлавших» мир) и `room:<ID>` (JSON-карта каждой
 из них; пишутся/читаются только эти комнаты — остальные лежат на диске в `data/<ID>.json` и
 подхватываются лениво). Плюс `seeded` (метка готовности: мир записан `engine/world_reset.php`;
-отсутствие даёт предупреждение в init.php, но не блокирует вход). Значения секций — JSON-строки,
-version/turn_time — int. ★ Изначального состояния мира в этих ключах нет: оно собирается кодом
+отсутствие даёт предупреждение в init.php, но не блокирует вход) и `ticker_beat` (float-микросекунды,
+метка живости демона тика — пишет tools/ticker.php каждый виток БЕЗ инкремента версии; init.php и
+debug.php предупреждают, если демон молчит >5 с). Значения секций — JSON-строки, version/turn_time — int.
+★ Изначального состояния мира в этих ключах нет: оно собирается кодом
 (`engine/world_builder.php`) и лишь затем сюда пишется, поэтому рестарт Redis с RDB/AOF
 восстанавливает прошлый бой, а не старт.
+★ Centrifugo использует ЭТОТ ЖЕ redis-server, но **db 1** (engine type redis, prefix `centrifugo`):
+reset-сессии делает `flushDB` на db 0 — боевой движок Centrifugo не должен лежать в той же БД.
 
 ### Конкурентность (важно знать перед правками)
 
@@ -302,7 +332,9 @@ version/turn_time — int. ★ Изначального состояния ми�
 не занимают). `action.php` содержит retry-логику
 сохранения. Подключение игрока (`join.php`) идёт через `world_save_cas($state, $expected_version)`:
 CAS-запись по версии мира с перечитыванием (rebase) и повтором до 3 попыток — параллельный тик
-poll.php или чужое подключение не затираются. Это осознанный минимализм стенда — при изменении
+тикера или чужое подключение не затираются. ★ После удаления poll.php писателей тика стало меньше
+(один демон вместо N long-poll-процессов) — конкурентность записей только тикер↔действия/join.
+Это осознанный минимализм стенда — при изменении
 модели записи не ухудшайте это.
 
 ## 5. Модель мира и ключевые механики (что ломать нельзя)
@@ -377,7 +409,7 @@ poll.php или чужое подключение не затираются. Э�
 - **Победа**: ★ **ВРЕМЕННО ВЫКЛЮЧЕНА (Этап 1)**: `engine_check_victory` (фасад `checkVictory`)
   сейчас возвращает `victory: false` всегда — с заготовленного состава из 4 бойцов условие
   «живых ≤ 1» было финалом боя, а с подключением по одному игроку оно сработало бы в первую
-  же секунду. Возвращаемый контракт прежний (poll отдаёт поле как есть, клиентский оверлей ждёт
+  же секунду. Возвращаемый контракт прежний (снапшот отдаёт поле как есть, клиентский оверлей ждёт
   его). TODO(лобби): включить проверку `count(alive) ≤ 1` обратно и требовать
   `count(participants) ≥ 2`; winner — id последнего живого.
 
@@ -387,22 +419,41 @@ poll.php или чужое подключение не затираются. Э�
 |---|---|---|---|
 | `php/init.php` | GET | — | `{success, message, room, rules, abilities, autonomous_objects, passives, effects}`; сайд-эффект: только пересчёт THREAT_ZONE (мир не трогается); 503, если мир не собран |
 | `php/init.php` | GET `?reset=1` / POST `{"reset":true}` | — | то же + поле `world_reset` (сводка сборки); сайд-эффект: полный rebuild Redis из изначального состояния; ошибки данных → 500 и мир НЕ изменён |
-| `php/poll.php` | GET | `v` (int версия клиента), `player` (PLAYER*, опционально — тики идут в любом случае) | flat snapshot (§4.3, **без обёртки `data`**, включает `server_now` — серверные часы для синхронизации анимаций), опционально `timeout:true` |
-| `php/action.php` | POST | JSON `{action: move\|attack\|ability\|special, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается |
-| `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/ATTACK/RANGE: 1..10, SHIELD/MAX_SHIELD: 0..10 (0 = щита нет), RESISTANCE: 0..9 (0 = сопротивления нет), ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot}` (`rejoin:true` при повторном входе того же uid); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира |
-| `php/debug.php` | GET | — | HTML-дамп диагностики движка и состава мира (не JSON!), только чтение |
+| `php/poll.php` | ★ удалён | доставка снапшотов — Centrifugo push (см. §4.3 и «Шина доставки» ниже) | |
+| `php/action.php` | POST | JSON `{action: move\|attack\|ability\|special, player, x, y, ability?}` | `{success, message, ...}`; ошибки валидации — HTTP 400 + JSON (не fatal 500); CORS preflight обрабатывается; успех → `battle_publish_world` (мгновенный push всем) |
+| `php/join.php` | POST | JSON-карточка `{uid (1..4), nickname, stats{HITPOINTS/MAX_HITPOINTS/ATTACK/RANGE: 1..10, SHIELD/MAX_SHIELD: 0..10 (0 = щита нет), RESISTANCE: 0..9 (0 = сопротивления нет), ACTIONS: 1..3}, abilities[3], passives[0..5]}` | `{success, player_id, slot, ws:{url, channel, token(JWT HS256), expires_in}}` (`rejoin:true` при повторном входе того же uid — тот же боец, новый токен); невалидная карточка → 400, занятые слоты (5-й игрок) → 409, мир не собран → 503; запись бойца — CAS по версии мира; успех/rejoin → публикация мира |
+| `php/dump_state.php` | GET | — | `{success, keys{battle:*}}` — диагностика, **только чтение** (используют diag.html и OVER-HTTP режим интеграционного теста) |
+| ~~`php/poll.php`~~ | — | ★ УДАЛЁН (переход на Centrifugo): доставка снапшотов — push в канал `battle:<PLAYER_ID>`; контракт снапшота сохранён 1-в-1 (§4.3) | |
+| `php/debug.php` | GET | — | HTML-дамп диагностики движка, состава мира и живости тикера/Centrifugo (не JSON!), только чтение |
 
 Все ответы — `application/json; charset=utf-8`, ошибки — `jsonError` (`{success:false,message}` +
 HTTP code). `error_reporting(0)` в config.php — **ошибки PHP в stdout убивают JSON**, поэтому
-вывод только через `jsonResponse` (он чистит буферы). Поле `rules` в ответах init/poll —
+вывод только через `jsonResponse` (он чистит буферы). Поле `rules` в ответах init и в each-снапшоте —
 канон серверных констант (`rules_client_payload()`); клиент пока использует собственный `CONFIG`
 (миграция на серверные правила — открытая задача, см. §7).
 
+### Шина доставки Centrifugo (engine/publish.php)
+
+- **Каналы**: персональные `battle:<PLAYER_ID>` (namespace `battle`, JWT-claim `channels` —
+  боец подписан только на свой). Снапшот строится отдельно на каждого (§4.3) — клиентский
+  `render(data)` не знает ничего о транспорте.
+- **Токены**: `centrifugo_user_token(player_id)` — HS256 (`sub`, `exp`, `channels`), секрет общий
+  с Centrifugo (`CENTRIFUGO_TOKEN_SECRET`); выдаёт join.php, клиент обновляет через идемпотентный
+  rejoin (callback `token` centrifuge-js → `refreshRealtimeToken()`).
+- **Публикации**: HTTP API (`CENTRIFUGO_API_URL`, заголовок `x-api-key`), stream context (без curl —
+  работает под `php -n`), fail-soft. Точка вызова — `battle_publish_world`: тикер (каждая смена
+  версии + heartbeat 1 с), join.php, action.php.
+- **Константы транспорта** — в `engine/publish.php` (guard + env-переопределение `CENTRIFUGO_*`),
+  НЕ в rules.php (это не игровые правила).
+- **Тесты**: env `CENTRIFUGO_SINK_FILE=файл.jsonl` — публикации пишутся в JSONL вместо сети
+  (integration шаг 4 проверяет содержимое снапшотов).
+
 ## 7. Константы и их дублирование
 
-Сервер: **единственный владелец — `engine/rules.php`** (guard-определения `if (!defined(...))`):
-GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_REGEN_PER_TURN=1`,
-`LONG_POLL_TIMEOUT=25`; префикс `battle:` живёт в `engine/world.php`. В `config.php` игровых
+Сервер: **единственный владелец игровых правил — `engine/rules.php`** (guard-определения `if (!defined(...))`):
+GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_REGEN_PER_TURN=1`
+(`LONG_POLL_TIMEOUT=25` удалён вместе с poll.php); префикс `battle:` живёт в `engine/world.php`.
+Транспортные константы Centrifugo — `engine/publish.php` (guard + env `CENTRIFUGO_*`). В `config.php` игровых
 констант больше нет (исторический конфликт двойного определения → fatal 500, не возвращать).
 Клиент: `CONFIG` в `js/config.js` (GRID_*, CELL_SIZE) + `css/game.css` (размер клетки) —
 **при изменении сетки/скоростей синхронизировать вручную**; сервер отдаёт те же значения в поле
@@ -452,11 +503,15 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
 2. Не разрывать граф зависимостей (§3): эндпоинты знают только про `engine/bootstrap.php`
    (+config как инфраструктуру); новые связи между системами — только шиной событий, порядок
    регистрации слушателей в bootstrap фиксирован.
-3. Любой mutate состояния обязан заканчиваться `world_save()` (§4) — иначе зависшие poll не проснутся.
+3. Любой mutate состояния обязан заканчиваться `world_save()` (§4) — иначе публикация не уйдёт
+   и подписчики зависнут на старом мире (инвариант «рост версии ⇔ доставка» теперь держит тикер).
 4. `emitReduce`-слушатели обязаны принимать payload **по ссылке**; значение-копия = молчаливый
    no-op (исторические баги: залипшие STUNNED, неработающие зоны угрозы турели).
-5. `turn_tick` вызывается КАЖДЫМ poll-запросом независимо от `?player=` — иначе эффекты/таймер
-   хода стоят при бездействии клиента.
+5. Тик мира идёт НЕ от запросов клиентов, а от демона `tools/ticker.php` (`world_tick_once`
+   каждый виток, независимо от подключений) — не заводить «ленивый тик» в action/join: эффекты/ход
+   обязаны двигаться и при нулевых клиентах. Тикер обязан быть запущен (init.php предупреждает
+   по `battle:ticker_beat`); дублировать его несколькими копиями можно (CAS безопасен), но
+   это лишние публикации.
 6. Не ломать двухфазность ловушек/NPC (§5 «движение»): предсказание в processMove работает **только
    на копии** (`makeTrapPreviewState` + dry_run для NPC) — если перенести реальные эффекты туда,
    анимация клиента разъедется с уроном и NPC будут тратить ACTIONS в фазе предсказания.
@@ -486,7 +541,7 @@ GRID 16×12, `MAX_MOVE_DISTANCE=5`, `MOVE_SPEED=3`, `TURN_DURATION=5`, `SHIELD_R
     HTTP-путь создания игрока (0 игроков = 0 персонажей, максимум `JOIN_MAX_PLAYERS` = 4 слота;
     пятый игрок получает 409). Запись мира из join.php идёт только через `world_save_cas`
     (CAS по версии + rebase, до 3 попыток) — прямая `world_save()` здесь конкурировала бы с
-    тиком poll.php и затирала бы чужие подключения. Повторный вход того же uid идемпотентен
+    тиком тикера и затирала бы чужие подключения. Повторный вход того же uid идемпотентен
     (`rejoin:true`), дубликат никнейма — 409. Сервер не доверяет клиенту: карточка проходит
     мировую валидацию (`world_builder_player_errors` / `world_build_player_from_payload`).
 16. Открытые задачи: миграция `js/*.js` на серверное поле `rules`; включение экрана победы

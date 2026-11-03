@@ -7,12 +7,13 @@
  * установлен. Двойник объявляет класс Redis ДО загрузки config.php
  * (auto_prepend_file), поэтому весь остальной код — настоящий.
  *
- * ★ КЛЮЧЕВОЕ ОТЛИЧИЕ от харнесса tests/harness_engine.php: здесь хранилище
- * ОБЩЕЕ ДЛЯ ВСЕХ соединений в рамках одного PHP-процесса (суперглобал
- * $GLOBALS['_redis_store']). Встроенный сервер php -S обрабатывает запросы
- * последовательно в одном процессе — состояние боя переживает несколько
- * HTTP-запросов, что и нужно для интеграционного сценария
- * init → join×4 → повторный join → пятый игрок.
+ * ★ КЛЮЧЕВОЕ ОТЛИЧИЕ от харнесса tests/harness_engine.php: хранилище живёт в
+ * суперглобале $GLOBALS['_redis_store'], НО php -S (как и FPM) сбрасывает
+ * глобальную область на каждый запрос — для режима OVER-HTTP состояние
+ * переживает серию запросов только через ФАЙЛОВЫЙ бэкинг FAKEREDIS_STORE_FILE
+ * (дамп загружается при первой операции запроса, сохраняется после мутаций).
+ * Без переменной поведение прежнее: общее хранилище в рамках одного запроса/
+ * процесса (in-process транспорт tests/integration_join.php).
  *
  * Поддерживаются ровно те команды, которые использует боевой код:
  * connect/select/setOption/close/ping/get/set/incr/del/flushdb/watch/unwatch/
@@ -34,11 +35,35 @@ class Redis {
     private $mode = null;   // null | 'pipeline' | 'tx'
     private $queue = [];    // [[cmd, args], ...]
 
+    // ★ Файловый бэкинг хранилища (режим OVER-HTTP, FAKEREDIS_STORE_FILE):
+    // встроенный сервер php -S ПЕРЕЗАПУСКАЕТ область глобальных переменных на
+    // каждый запрос (как FPM) — «общее хранилище процесса» через $GLOBALS между
+    // запросами НЕ живёт. При заданном файле дамп загружается при первой
+    // операции запроса и сохраняется после каждой мутации: состояние боя
+    // переживает серию HTTP-запросов сценария init → join×4 → …
+    private function file() {
+        $f = getenv('FAKEREDIS_STORE_FILE');
+        return ($f === false || $f === '') ? null : $f;
+    }
+
+    private function sync() {
+        $f = $this->file();
+        if ($f !== null) {
+            file_put_contents($f, serialize($GLOBALS['_redis_store'] ?? []), LOCK_EX);
+        }
+    }
+
     private function &store() {
         if (!isset($GLOBALS['_redis_store']) || !is_array($GLOBALS['_redis_store'])) {
             $GLOBALS['_redis_store'] = [];
+            $f = $this->file();
+            if ($f !== null && is_file($f)) {
+                $d = @unserialize((string)file_get_contents($f));
+                if (is_array($d)) $GLOBALS['_redis_store'] = $d;
+            }
         }
-        return $GLOBALS['_redis_store'];
+        $ref =& $GLOBALS['_redis_store'];
+        return $ref;
     }
 
     public function connect($h, $p, $t = 0) {
@@ -61,11 +86,12 @@ class Redis {
     private function run($cmd, $args) {
         switch ($cmd) {
             case 'get': { $s =& $this->store(); return $s[$args[0]] ?? false; }
-            case 'set': { $s =& $this->store(); $s[$args[0]] = (string)$args[1]; return true; }
+            case 'set': { $s =& $this->store(); $s[$args[0]] = (string)$args[1]; $this->sync(); return true; }
             case 'incr': {
                 $s =& $this->store();
                 $v = (int)($s[$args[0]] ?? 0) + 1;
                 $s[$args[0]] = (string)$v;
+                $this->sync();
                 return $v;
             }
             case 'del': {
@@ -75,9 +101,24 @@ class Redis {
                     $kk = is_array($k) ? $k : [$k];
                     foreach ($kk as $x) if (isset($s[$x])) { unset($s[$x]); $n++; }
                 }
+                $this->sync();
                 return $n;
             }
-            case 'flushdb': { $s =& $this->store(); $s = []; return true; }
+            case 'flushdb': { $s =& $this->store(); $s = []; $this->sync(); return true; }
+            case 'keys': {
+                // Глоб-паттерн (использует php/dump_state.php): поддержан суффикс '*'.
+                $s =& $this->store();
+                $pat = (string)$args[0];
+                if (substr($pat, -1) === '*' && strpos($pat, '*') === strlen($pat) - 1) {
+                    $pre = substr($pat, 0, -1);
+                    $out = [];
+                    foreach (array_keys($s) as $k) {
+                        if ($pre === '' || strpos($k, $pre) === 0) $out[] = $k;
+                    }
+                    return $out;
+                }
+                throw new RedisException("fakeredis stub: keys поддержан только в форме 'префикс*'");
+            }
             default:
                 throw new RedisException("fakeredis stub: неподдерживаемая команда '$cmd'");
         }
@@ -95,6 +136,7 @@ class Redis {
         $out = [];
         foreach ($this->queue as $op) $out[] = $this->run($op[0], $op[1]);
         $this->mode = null; $this->queue = [];
+        $this->sync(); // pipeline/tx: гарантируем дамп даже если run() не вызывал sync
         return $out;
     }
 

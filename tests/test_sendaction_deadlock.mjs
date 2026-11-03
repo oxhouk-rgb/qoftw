@@ -24,11 +24,13 @@ let http400Body = null;    // если не null — fetch отвечает HTTP
 let notifications = [];
 
 // Минимальные стабы окружения, которые использует net.js
-globalThis.state = { playerId: 'p1', version: 0, data: null, polling: false };
+// (polling/startPolling убраны вместе с long polling — транспорт Centrifugo,
+// sendAction к нему не обращается)
+globalThis.state = { playerId: 'p1', version: 0, data: null };
 globalThis.CONFIG = { PHP_URL: 'http://localhost/' };
 globalThis.showNotification = (msg, kind) => notifications.push([kind, msg]);
 globalThis.buildGrid = () => {};
-globalThis.startPolling = () => {};
+globalThis.startRealtime = () => {};
 globalThis.render = () => {};
 globalThis.setTimeoutOrig = setTimeout;
 

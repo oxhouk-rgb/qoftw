@@ -42,8 +42,14 @@ php/engine/world_builder.php        — ★ сборщик ИЗНАЧАЛЬНО�
 php/engine/world_reset.php          — ★ перезапуск сессии: build + write (flushDB, version=1)
 tools/reset_world.php               — CLI сброс мира (тот же код, что init.php?reset=1)
 php/init.php                        — GET: проверка готовности мира; ?reset=1 — явный перезапуск
-php/poll.php                        — GET long-poll + серверный тик + snapshot комнаты игрока
-php/action.php                      — POST: валидация + роутинг move/attack/ability/special
+php/poll.php                        — ★ УДАЛЁН: long polling заменён на Centrifugo (11/2026)
+tools/ticker.php                    — ★ ДЕМОН ТИКА МИРА (world_tick_once + публикация снапшотов);
+                                      должен быть запущен: php tools/ticker.php
+php/engine/snapshot.php             — build_snapshot_response (flat-контракт) + world_tick_once
+php/engine/publish.php              — Centrifugo: JWT-токены, publish через HTTP API (fail-soft),
+                                      battle_publish_world, метка ticker_beat, константы CENTRIFUGO_*
+php/dump_state.php                  — GET: дамп ключей battle:* (только чтение; diag/тесты)
+php/action.php                      — POST: валидация + роутинг move/attack/ability/special (+publish)
 php/debug.php                       — диагностика окружения (GET)
 php/battle.php                      — фасад обратной совместимости (require всего движка)
 php/engine/rules.php                — чистые формулы (ход, урон, поворот)
@@ -61,7 +67,7 @@ php/systems/abilities.php           — реализация способнос�
 php/systems/objects.php             — бочки/мина/турель
 php/systems/rooms.php               — комнаты, двери, телепорт, респаун
 tests/harness_engine.php            — CLI-харнесс сценарных тестов (in-memory фейк Redis)
-tests/integration_join.php          — HTTP-интеграл цикла init→join→poll (fake Redis;
+tests/integration_join.php          — HTTP-интеграл цикла init→join→публикации (fake Redis;
                                       run_integration_join.sh — прогон OVER-HTTP через php -S)
 tests/verify_llf.py · docs/gen_llf.sh — regenerate и честность-проверка индекса LLF.md
 docs/LLF.md                         — ★ индекс всех функций (имя → файл:строка → назначение)
@@ -83,8 +89,10 @@ ARCH.md / ABOUT.md / README.md      — справочники; читать В�
 ## 4. Табу стека (короткая версия; полная — ARCH.md §1)
 
 ❌ React/Vue/Angular, ❌ Node.js/npm/сборщики, ❌ игровая логика на клиенте,
-❌ WebSocket/SSE вместо long polling, ❌ файловое состояние вместо Redis, ❌ PHP-фреймворки.
-Клиент выполняет ровно три роли: **polling, рендер, ввод**. Единственная допустимая «копия серверной
+❌ файловое состояние вместо Redis, ❌ PHP-фреймворки.
+★ long polling УДАЛЁН решением автора (11/2026): транспорт снапшотов — Centrifugo (WebSocket push,
+канал `battle:<PLAYER_ID>`), тик мира — демон `tools/ticker.php`; прежний WebSocket-запрет не действует.
+Клиент выполняет ровно три роли: **приём снапшотов, рендер, ввод**. Единственная допустимая «копия серверной
 формулы» на клиенте — `previewTurn()`; локальные проверки пути (`isPathClear` и т.п.) — только UX.
 
 ## 5. Клиентская архитектура (game.js РАЗБИТ на модули — выполнено)
@@ -94,8 +102,11 @@ ARCH.md / ABOUT.md / README.md      — справочники; читать В�
 ```
 js/config.js       — CONFIG (пути к php/, размеры сетки, CELL_SIZE)
 js/state.js        — глобальный state + effectiveMoveRange()
-js/net.js          — initGame, joinGame (POST join.php с карточкой персонажа), startPolling, poll,
-                     nextActionId, sendAction (retry-логика)
+js/net.js          — initGame, joinGame (POST join.php с карточкой персонажа; сохраняет
+                      state.ws/state.lastCard), nextActionId, sendAction (retry-логика), syncClock
+js/realtime.js     — startRealtime (Centrifuge-клиент, подписка battle:<playerId>),
+                      handleRealtimeSnapshot (publication → syncClock + render), refreshRealtimeToken
+js/vendor/centrifuge.min.js — статический UMD centrifuge-js (globalThis.Centrifuge; без npm)
 js/grid.js         — buildGrid/rebuildGrid, findEntity, inCurrentRoom, purgeOutOfViewRoomEntities
 js/path.js         — isPathClear, isCellFreeForMove, hasLineOfSight (UX-проверки)
 js/input.js        — onCellClick, checkAvailableActions, showActionDialog, closeDialog
@@ -121,7 +132,9 @@ js/main.js         — точка входа: экран настройки пе
    400 — битая карточка; 409 — ник занят / все 4 слота заняты (пятый игрок не пройдёт);
    повторный вход того же uid идемпотентен (`rejoin:true`).
 3. Только после успешного join: `initGame(player_id)` → `init.php` (без player-параметра
-   состава — состав уже в мире) → цикл `poll.php?v=N&player=PLAYER_ID`.
+   состава — состав уже в мире) → `startRealtime()`: подписка Centrifugo на `ws.channel`
+   из ответа join; снапшоты приходят push-ем (демон `tools/ticker.php` + мгновенные
+   публикации action/join). Нужны запущенные `centrifugo` и тикер.
 
 Последствия для правок: состав боя в Redis меняется подключениями, а не снимком
 (`data/initial_snapshot.json` изначально пуст); после `reset` мира бойцов нет — игроков

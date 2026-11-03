@@ -6,7 +6,7 @@
 > `grep -n "имя_функции" docs/LLF.md` → затем читать код по указанному file:line.
 
 
-## Клиент (js/animation.js, js/config.js, js/grid.js, js/input.js, js/main.js, js/net.js, js/path.js, js/render.js, js/state.js, js/utils.js)
+## Клиент (js/animation.js, js/config.js, js/grid.js, js/input.js, js/main.js, js/net.js, js/path.js, js/realtime.js, js/render.js, js/state.js, js/utils.js)
 
 ### `js/animation.js` (11 фукн.)
 
@@ -47,28 +47,26 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `setupStatus` | :25 |  |
-| `fetchRegistries` | :36 | Шаг 1: подтянуть реестры способностей/пассивок из init.php (идемпотентный |
-| `buildAbilitySelector` | :58 |  |
-| `updateAbilityCount` | :72 |  |
-| `selectedAbilities` | :79 |  |
-| `buildPassivesList` | :84 |  |
-| `selectedPassives` | :101 |  |
-| `updatePassiveCount` | :106 |  |
-| `validateCharacterForm` | :118 | Клиентская половина правил join.php: проверка ДО отправки (быстрый фидбек), |
-| `collectCharacterCard` | :149 | Собрать карточку персонажа — контракт php/join.php (в будущем её присылает |
+| `setupStatus` | :26 |  |
+| `fetchRegistries` | :37 | Шаг 1: подтянуть реестры способностей/пассивок из init.php (идемпотентный |
+| `buildAbilitySelector` | :59 |  |
+| `updateAbilityCount` | :73 |  |
+| `selectedAbilities` | :80 |  |
+| `buildPassivesList` | :85 |  |
+| `selectedPassives` | :102 |  |
+| `updatePassiveCount` | :107 |  |
+| `validateCharacterForm` | :119 | Клиентская половина правил join.php: проверка ДО отправки (быстрый фидбек), |
+| `collectCharacterCard` | :150 | Собрать карточку персонажа — контракт php/join.php (в будущем её присылает |
 
-### `js/net.js` (7 фукн.)
+### `js/net.js` (5 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
 | `joinGame` | :31 | Подключение к бою по карточке персонажа (шаг 2 порядка вызовов, см. main.js): |
-| `initGame` | :68 | Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт polling. |
-| `syncClock` | :149 | ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения). |
-| `startPolling` | :175 | Запуск цикла long polling |
-| `poll` | :184 | Один запрос long polling |
-| `nextActionId` | :237 |  |
-| `sendAction` | :276 | Отправить действие на сервер с retry логикой. |
+| `initGame` | :73 | Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт |
+| `syncClock` | :158 | ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения). |
+| `nextActionId` | :189 |  |
+| `sendAction` | :228 | Отправить действие на сервер с retry логикой. |
 
 ### `js/path.js` (3 фукн.)
 
@@ -77,6 +75,14 @@
 | `isPathClear` | :9 | Проверка прямой линии между двумя точками (нет ли препятствий) |
 | `isCellFreeForMove` | :87 | Проверка свободна ли клетка для перемещения |
 | `hasLineOfSight` | :142 | Проверка линии видимости для способностей (может проходить через пустые клетки) |
+
+### `js/realtime.js` (3 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `startRealtime` | :15 | Запуск realtime-подписки после успешного join+init. |
+| `handleRealtimeSnapshot` | :90 | Обработка входящего снапшота. Контракт flat-данных совпадает с прежним |
+| `refreshRealtimeToken` | :110 | Обновление истёкшего/продлённого токена: повторный POST join.php с той же |
 
 ### `js/render.js` (13 фукн.)
 
@@ -100,8 +106,8 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `serverTimeSec` | :45 | ★ Перевод локальных часов (performance.now, мс) в серверные (unix, сек) — |
-| `effectiveMoveRange` | :57 | ★ Пункт плана №4: эффективная дальность хода со всеми модификаторами. |
+| `serverTimeSec` | :51 | ★ Перевод локальных часов (performance.now, мс) в серверные (unix, сек) — |
+| `effectiveMoveRange` | :63 | ★ Пункт плана №4: эффективная дальность хода со всеми модификаторами. |
 
 ### `js/utils.js` (4 фукн.)
 
@@ -147,23 +153,23 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `redisConnect` | :58 |  |
-| `isRedisConnected` | :82 |  |
-| `getRedisHandle` | :88 |  |
-| `getRedis` | :101 |  |
-| `closeRedis` | :109 |  |
-| `getBattleState` | :124 |  |
-| `saveBattleState` | :199 |  |
-| `addLog` | :301 |  |
-| `parseXY` | :319 |  |
-| `formatXY` | :327 |  |
-| `isValidPosition` | :339 |  |
-| `setCorsHeaders` | :346 |  |
-| `jsonResponse` | :356 |  |
-| `requestInput` | :373 |  |
-| `jsonError` | :387 |  |
-| `clearOutputBuffers` | :397 |  |
-| `sendJsonErrorFallback` | :405 |  |
+| `redisConnect` | :62 |  |
+| `isRedisConnected` | :86 |  |
+| `getRedisHandle` | :92 |  |
+| `getRedis` | :105 |  |
+| `closeRedis` | :113 |  |
+| `getBattleState` | :128 |  |
+| `saveBattleState` | :203 |  |
+| `addLog` | :305 |  |
+| `parseXY` | :323 |  |
+| `formatXY` | :331 |  |
+| `isValidPosition` | :343 |  |
+| `setCorsHeaders` | :350 |  |
+| `jsonResponse` | :360 |  |
+| `requestInput` | :377 |  |
+| `jsonError` | :391 |  |
+| `clearOutputBuffers` | :401 |  |
+| `sendJsonErrorFallback` | :409 |  |
 
 ### `php/join.php` (3 фукн.)
 
@@ -173,12 +179,6 @@
 | `join_validate_abilities` | :102 | Строгий разбор списка способностей: ровно JOIN_ABILITY_COUNT уникальных |
 | `join_validate_passives` | :132 | Строгий разбор пассивок: 0..JOIN_PASSIVES_MAX уникальных имён из реестра. |
 
-### `php/poll.php` (1 фукн.)
-
-| Функция | Строка | Назначение |
-|---|---|---|
-| `build_poll_response` | :136 | Сборка flat-ответа poll (контракт клиента js/net.js/render.js render(data)). |
-
 
 ## Ядро движка (php/engine/)
 
@@ -186,7 +186,7 @@
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `engine_check_victory` | :60 | Проверка победы: все игроки одной стороны мертвы/удалены (кроме последнего). |
+| `engine_check_victory` | :65 | Проверка победы: все игроки одной стороны мертвы/удалены (кроме последнего). |
 
 ### `php/engine/events.php` (6 фукн.)
 
@@ -213,12 +213,32 @@
 | `cellsInRadius` | :112 |  |
 | `directionStep` | :130 |  |
 
+### `php/engine/publish.php` (8 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `battle_channel` | :44 |  |
+| `centrifugo_b64url` | :50 |  |
+| `centrifugo_user_token` | :61 | User-токен Centrifugo (HS256 JWT) для бойца: sub = player_id, |
+| `centrifugo_ws_payload` | :80 | WS-параметры для клиента (поле ws в ответах join.php): url + токен + |
+| `centrifugo_publish` | :97 | Опубликовать данные в канал. Fail-soft: всегда возвращает bool, никогда |
+| `battle_publish_world` | :130 | Опубликовать текущий мир всем бойцам: снапшот собирается отдельно на |
+| `ticker_beat_touch` | :148 | Метка живости тикового демона (battle:ticker_beat, мбсек). Пишется КАЖДЫЙ |
+| `ticker_beat_age` | :155 |  |
+
 ### `php/engine/rules.php` (2 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `rules_turn_formula` | :59 | Серверная формула направления спрайта TURN (только лево/право): |
-| `rules_client_payload` | :68 | Пакет правил для отправки клиенту (поле "rules" в ответах init/poll). |
+| `rules_turn_formula` | :60 | Серверная формула направления спрайта TURN (только лево/право): |
+| `rules_client_payload` | :69 | Пакет правил для отправки клиенту (поле "rules" в ответах init/poll). |
+
+### `php/engine/snapshot.php` (2 фукн.)
+
+| Функция | Строка | Назначение |
+|---|---|---|
+| `world_tick_once` | :39 | Один виток тика движка (бывший цикл poll.php, без HTTP-слоя). |
+| `build_snapshot_response` | :72 | Сборка flat-снапшота (контракт клиента js/render.js render(data)). |
 
 ### `php/engine/turn.php` (9 фукн.)
 
@@ -412,24 +432,25 @@
 | `harness_room_loaded` | :212 | Проверка «комната оседла в состоянии»: карта комнаты может лежать либо |
 | `test_exit_transition` | :219 | ------------------------------------------------------------------ T1 |
 | `test_respawn_via_teleport` | :255 | ------------------------------------------------------------------ T2 |
-| `test_poll_room_filtering` | :292 | poll.php — HTTP-эндпоинт: при require сразу исполняет long-poll цикл и |
-| `test_crossroom_targeting` | :331 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
-| `test_world_reset_restores_initial_state` | :379 | T5. ВОСПРОИЗВОДИМОСТЬ ИЗ НАЧАЛЬНОГО СОСТОЯНИЯ (главная регрессия после |
-| `test_paralyzed_blocks_move_with_game_message` | :467 | T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода |
-| `test_dot_expiry_does_not_stop_movement` | :524 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
-| `test_death_clears_effects` | :627 | T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED |
-| `test_puncture_attack_reaches_trap_behind_blocker` | :693 | T9. ★ PUNCTURE + Land Mine (регресс бага «атака не достигает мины, если |
+| `test_poll_room_filtering` | :290 | engine/snapshot.php — сборщик снапшотов (бывш. build_poll_response из |
+| `test_crossroom_targeting` | :318 | T4. Комнатная изоляция целей (regression бага «атака пустой клетки задевает |
+| `test_world_reset_restores_initial_state` | :366 | T5. ВОСПРОИЗВОДИМОСТЬ ИЗ НАЧАЛЬНОГО СОСТОЯНИЯ (главная регрессия после |
+| `test_paralyzed_blocks_move_with_game_message` | :454 | T6. PARALYZED (бывш. FROZEN) — обездвиживающий cc-статус: попытка хода |
+| `test_dot_expiry_does_not_stop_movement` | :511 | T7. DoT НЕ прерывает движение (регрессия бага «игрок останавливается там, |
+| `test_death_clears_effects` | :614 | T8. ★ Смерть снимает все статус-эффекты (регресс бага «DoT/PARALYZED |
+| `test_puncture_attack_reaches_trap_behind_blocker` | :680 | T9. ★ PUNCTURE + Land Mine (регресс бага «атака не достигает мины, если |
 
-### `tests/integration_join.php` (6 фукн.)
+### `tests/integration_join.php` (7 фукн.)
 
 | Функция | Строка | Назначение |
 |---|---|---|
-| `integration_serve_router` | :61 |  |
-| `check` | :82 |  |
-| `http_req` | :123 |  |
-| `inproc_req` | :149 |  |
-| `build_child_script` | :270 | var_export'ом — никакого ручного экранирования в шаблоне. |
-| `make_card` | :351 |  |
+| `integration_serve_router` | :75 |  |
+| `check` | :116 |  |
+| `http_req` | :157 |  |
+| `inproc_req` | :183 |  |
+| `build_child_script` | :325 | var_export'ом — никакого ручного экранирования в шаблоне. |
+| `test_store` | :410 | json_decode($st['battle:players']) работали без изменений. |
+| `make_card` | :424 |  |
 
 ### `tests/test_lost_update.php` (1 фукн.)
 
@@ -438,4 +459,4 @@
 | `check` | :18 |  |
 
 
-<!-- Всего функций: 257 -->
+<!-- Всего функций: 268 -->

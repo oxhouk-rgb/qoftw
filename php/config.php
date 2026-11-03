@@ -14,8 +14,9 @@ if (!defined('REDIS_DB')) define('REDIS_DB', 0);
 
 // Константы игры — ЗДЕСЬ НЕ ОПРЕДЕЛЯЮТСЯ.
 // Единый источник игровых правил (GRID_*, MOVE_SPEED, TURN_DURATION,
-// MAX_MOVE_DISTANCE, LONG_POLL_TIMEOUT и т.д.) — php/engine/rules.php.
-// config.php отвечает только за Redis-коннект, ключи и JSON-хелперы.
+// MAX_MOVE_DISTANCE и т.д.) — php/engine/rules.php. Транспортные константы
+// Centrifugo — php/engine/publish.php. config.php отвечает только за
+// Redis-коннект, ключи и JSON-хелперы.
 // (Раньше здесь был дубль констант, из-за которого при двойном подключении
 // возникал фатальный "Constant already defined" → HTTP 500.)
 
@@ -43,6 +44,9 @@ if (!defined('REDIS_VERSION')) define('REDIS_VERSION', REDIS_PREFIX . 'version')
 if (!defined('REDIS_LOG')) define('REDIS_LOG', REDIS_PREFIX . 'log');
 // Журнал подтверждённых действий (защита от «потери пакета» при ретраях — см. engine/world.php)
 if (!defined('REDIS_ACTION_ACKS')) define('REDIS_ACTION_ACKS', REDIS_PREFIX . 'action_acks');
+// Метка живости тикового демона (tools/ticker.php пишет каждый виток без
+// инкремента версии; init.php предупреждает, если демон молчит).
+if (!defined('REDIS_TICKER_BEAT')) define('REDIS_TICKER_BEAT', REDIS_PREFIX . 'ticker_beat');
 
 // Подключение к Redis
 // РАЗДЕЛЕНИЕ ХЕНДЛАРА И ФЛАГА СОЕДИНЕНИЯ — исправление бага «потери пакета»:
@@ -171,7 +175,7 @@ if (!function_exists('getBattleState')) {
 
 // ★ ЕДИНЫЙ СЧЁТЧИК ВЕРСИИ: REDIS_VERSION — единственный источник истины о
 // версии мира. Его читают world_load()/getBattleState() (ожидаемая версия в
-// action.php), его инкрементируют ОБА пути записи (legacy-тик poll.php/init и
+// action.php), его инкрементируют ОБА пути записи (legacy-тик тикера/init и
 // CAS-action), по нему работает long-poll. Второй счётчик («state_version»)
 // был причиной регрессии «503 после первого действия»: legacy-путь никогда его
 // не обновлял, и каждая следующая CAS-запись ложно считалась гонкой.
@@ -239,7 +243,7 @@ if (!function_exists('saveBattleState')) {
         // CAS (compare-and-swap) через транзакцию WATCH/MULTI/EXEC:
         // EXEC атомарно отменится (вернёт false), если параллельный процесс
         // успел изменить мир между нашим WATCH и EXEC. Мониторим ВСЕ секции
-        // состояния, а не только счётчик версии: тик poll.php пишет секции в
+        // состояния, а не только счётчик версии: тик тикера пишет секции в
         // pipeline-транзакции, которая может пересечься с нашим окном read→save;
         // именно watch по данным ловит реальную гонку read-modify-write даже
         // когда номер версии уже совпадает (exec() отменится сам).
@@ -283,7 +287,7 @@ if (!function_exists('saveBattleState')) {
         $tx->set(REDIS_TURN_TIME, $enc[5]);
         $tx->set(REDIS_PROJECTILES, $enc[6]);
         // Единый monotonic-счётчик: рост версии неразрывен с записью данных
-        // (в той же транзакции) — long-poll гарантированно увидит изменение.
+        // (в той же транзакции) — long-тик гарантированно увидит изменение.
         $tx->incr(REDIS_VERSION);
         $tx->set(REDIS_LOG, $enc[7]);
         $tx->set(REDIS_ROOM_KEY_PREFIX . 'list', $enc[8]);

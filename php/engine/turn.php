@@ -2,7 +2,7 @@
 /**
  * engine/turn.php — Оркестратор серверного тика и хода.
  *
- * Тик (каждый poll-цикл): movement_update → death chain → projectiles →
+ * Тик (каждый тик-цикл): movement_update → death chain → projectiles →
  * attack status reset → npc animation update.
  * Ход (раз в TURN_DURATION): emit('turn.start') — слушатели:
  *   passives(REGENERATION) → effects(DOT/CC tick) → combat(ACTIONS/shield regen,
@@ -112,7 +112,7 @@ function turn_sync_status_after_effect(&$state, $payload) {
 
 /**
  * Один серверный тик: все анимационно-временные обновления + ход мира.
- * Возвращает true если состояние изменилось (нужен бум версии для long-poll).
+ * Возвращает true если состояние изменилось (нужен бум версии для long-тик).
  *
  * ВАЖНО (баг «таймер стоит на месте»): тик и проверка хода выполняются ВСЕГДА,
  * независимо от того, передал клиент ?player= или знает ли он этого игрока.
@@ -186,7 +186,7 @@ function turn_tick(&$state) {
  *
  * ВАЖНО: если turn_time не задан (0) — это первый контакт с миром после
  * init.php или legacy-состояние. Инициализируем его ТЕКУЩИМ временем и НЕ
- * запускаем ход: иначе весь long-poll цикл (poll → tick → advance → save)
+ * запускаем ход: иначе весь long-тик цикл (тик → tick → advance → save)
  * инкрементировал бы REDIS_VERSION на каждой итерации, версия менялась бы
  * быстрее, чем клиент успевает обработать ответ, и client-side таймер хода
  * «замирал» бы до первого действия игрока (баг рефакторинга).

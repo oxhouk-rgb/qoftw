@@ -8,8 +8,10 @@
 # каждая вторая CAS-запись ложно считалась гонкой → 3 неудачные попытки →
 # стабильный 503. Исправление: единый счётчик версии для обоих путей записи.
 #
-# Проба прогоняет НЕСКОЛЬКО последовательных действий при ФОНОВОМ long-poll
-# (параллельные тики, как в реальной игре) и требует success:true от каждого.
+# Проба прогоняет НЕСКОЛЬКО последовательных действий при ФОНОВЫХ тикерах
+# (параллельные процессы tools/ticker.php — конкурентная обстановка, в которой
+# жил баг; раньше роль тиков выполняли long-poll соединения) и требует
+# success:true от каждого.
 #
 # Запуск: bash tests/hang_probe.sh [base_url]
 #   base_url по умолчанию http://127.0.0.1:8899 (php -S 127.0.0.1:8899 -t php)
@@ -25,7 +27,7 @@ check() { # name cond_ok
 }
 
 # Сервер жив?
-if ! curl -s -o /dev/null --max-time 3 "$BASE/poll.php?v=0"; then
+if ! curl -s -o /dev/null --max-time 3 "$BASE/init.php"; then
     say "SKIP сервер недоступен на $BASE (запустите: php -S 127.0.0.1:8899 -t php)"
     exit 0
 fi
@@ -42,11 +44,13 @@ print(json.dumps(p))')" > /dev/null
 redis-cli del battle:npcs battle:action_acks > /dev/null
 redis-cli incr battle:version > /dev/null
 
-# Фоновый long-poll: бесконечная лента GET-запросов → параллельные тики мира
+# Фоновые тикеры: три процесса world_tick_once→CAS-save — параллельные тики мира
 # (движение NPC, ходы), ровно та конкурентная обстановка, в которой жил баг.
+# Публикации уходят в sink-файл, а не в живую Centrifugo: проба проверяет
+# конкурентность записи, не шину.
 PIDS=()
 for i in 1 2 3; do
-    ( while true; do curl -s --max-time 30 "$BASE/poll.php?v=0" > /dev/null; done ) &
+    ( while true; do CENTRIFUGO_SINK_FILE=/tmp/hang_probe_pubs.jsonl php "$ROOT/tools/ticker.php" --iterations=50 > /dev/null; done ) &
     PIDS+=($!)
 done
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; }

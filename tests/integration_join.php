@@ -1,6 +1,7 @@
 <?php
 /**
- * ИНТЕГРАЦИОННЫЙ ТЕСТ: HTTP-контракт init.php → join.php → poll.php (Этап 1).
+ * ИНТЕГРАЦИОННЫЙ ТЕСТ: HTTP-контракт init.php → join.php → публикации
+ * Centrifugo-снапшотов (Этап 1 + переход с long polling, ноябрь 2026).
  *
  * Два режима прогона:
  *   A) IN-PROCESS (значение по умолчанию): `php -n tests/integration_join.php`.
@@ -16,8 +17,10 @@
  *   1. GET  init.php?reset=1   — сборка НОВОЙ сессии; бойцов 0 («0 игроков = 0 персонажей»);
  *   2. GET  init.php           — обычный вход ЛЕГАЛЕН с пустым списком бойцов (не 503!)
  *                                и отдаёт реестры abilities/passives для формы настройки;
- *   3. POST join.php ×4        — четыре игрока заселяют слоты A1/A5/E1/E5;
- *   4. poll.php                — N игроков = N персонажей у клиента; ALLY='NONE'; UID из карточки;
+ *   3. POST join.php ×4        — четыре игрока заселяют слоты A1/A5/E1/E5 + каждый
+ *                                ответ несёт ws-блок (Centrifugo url/канал/JWT);
+ *   4. sink публикаций          — join.php публикует снапшоты в каналы battle:<ID>:
+ *                                N игроков = N персонажей; ALLY='NONE'; UID из карточки;
  *   5. POST join.php (uid=2)   — повторный вход идемпотентен (rejoin:true, бойцов всё ещё 4);
  *   6. POST join.php (uid=5)   — пятый игрок: uid вне слотов → 400 (защита статичной сессии);
  *   7. reset + join×4 + 5-й    — слот заполнен чужим uid → конфликт ника/слота → 409;
@@ -37,10 +40,12 @@
 //     поднят как router скрипт `php -S` — каждый входящий запрос проксируется
 //     в реальный эндпоинт php/<script>.php с сохранением метода/тела/GET.
 //     Так тест проверяет сквозной HTTP-контракт, а боевые файлы остаются нетронутыми.
-if (php_sapi_name() === 'cli' && in_array('--serve', $argv ?? [], true)) {
-    integration_serve_router();
-    exit(0);
-}
+// ★ Роутер под `php -S` (run_integration_join.sh): сапи 'cli-server' — он бывает
+// только у встроенного сервера, и $argv там НЕ определён (проверка '--serve'
+// никогда не срабатывала, и сервер вместо роутера исполнял клиентскую половину —
+// регрессия режима OVER-HTTP). CLI-роль '--serve' оставлена для ручных прогонов.
+// ★ Порядок: развилка ролей ОБЯЗАНА идти после определения BATTLE_PROJECT_ROOT —
+// integration_serve_router() читает его на первом же запросе.
 
 // ★ Корень проекта — ЕДИНСТВЕННЫЙ источник путей для всех режимов запуска.
 // __DIR__/dirname(__FILE__) работают только при прямом запуске файла; при
@@ -58,7 +63,26 @@ if (!defined('BATTLE_PROJECT_ROOT')) {
     unset($root);
 }
 
+if (php_sapi_name() === 'cli-server') {
+    integration_serve_router();
+    exit(0);
+}
+if (php_sapi_name() === 'cli' && in_array('--serve', $argv ?? [], true)) {
+    integration_serve_router();
+    exit(0);
+}
+
 function integration_serve_router(): void {
+    // ★ Двойник Redis подключаем ЯВНО: auto_prepend_file под php -S в ряда сборок
+    // (в т.ч. Windows PHP 8.1) молча не исполняется — эндпоинты получали
+    // «Расширение Redis не установлено». require ДО кода эндпоинта (класс Redis
+    // обязан существовать до config.php); extension_loaded guard — чтобы на
+    // машине с живым php-redis-расширением тест всё равно шёл через фейк, если
+    // сервер поднят с -n, или через него, если расширение включено намеренно.
+    if (!class_exists('Redis', false)) {
+        require BATTLE_PROJECT_ROOT . '/tests/fakeredis_stub.php';
+    }
+    putenv('FAKEREDIS_SHARED=1'); // shared-хранилище процесса для connect()
     // ★ В роли маршрутизатора весь код НИЖЕ этого блока (проверки check(),
     // эмуляция http_req через file_get_contents и т.д.) недопустим — иначе
     // при каждом запросе сервер «сам себе» отправил бы серию HTTP-запросов
@@ -77,6 +101,16 @@ function integration_serve_router(): void {
 
 // ─── Дальше идёт только роль «КЛИЕНТ» ───────────────────────────────────────
 $INTEGRATION_ONLY = true; // маркер читаемости: секция не исполняется в --serve
+
+// Нужен ли дочерним процессам флаг -n: если штатный запуск PHP грузит НАСТОЯЩЕЕ
+// расширение redis, двойник fakeredis_stub не объявится (class_exists guard) и
+// потомки пойдут писать в живой Redis. Проверяем один раз на старте.
+if (!defined('INTEGRATION_CHILD_NEEDS_N')) {
+    $probe = shell_exec(escapeshellarg(PHP_BINARY)
+        . ' -r "echo class_exists(\'Redis\') ? 1 : 0;" 2>NUL');
+    define('INTEGRATION_CHILD_NEEDS_N', trim((string)$probe) === '1');
+    unset($probe);
+}
 
 $PASS = 0; $FAIL = 0;
 function check($cond, $label) {
@@ -176,17 +210,38 @@ function inproc_req(string $script, ?string $body, array $get): array {
         1 => ['file', $INPROC_TMP . '/out.txt', 'w'],
         2 => ['pipe', 'w'],
     ];
+    // ★ Дочерний интерпретатор: PHP_BINARY (не 'php' из PATH — тот мог вообще
+    // отсутствовать в окружении запуска). Флаг -n добавляется, если обычный запуск
+    // грузит НАСТОЯЩЕЕ расширение redis: тогда двойник fakeredis_stub не объявится
+    // (class_exists guard) и потомок пишет в живой Redis вместо фейка — тест
+    // теряет герметичность и мутирует боевое хранилище. Под -n redis отключается,
+    // а ctype/json/hash остаются (статически в сборке).
+    $child_cmd = [PHP_BINARY, '-d', 'error_reporting=0'];
+    if (INTEGRATION_CHILD_NEEDS_N) {
+        $child_cmd[] = '-n';
+    }
+    $child_cmd[] = $INPROC_TMP . '/child.php';
     $proc = proc_open(
-        // ★ БЕЗ флага -n: он отключает загрузку php.ini и всех неисключимых
+        // ★ БЕЗ флага -n по умолчанию: он отключает загрузку php.ini и всех неисключимых
         // расширений (ctype/json и т.п.) — боевой код php/join.php использует
         // ctype_digit() и падал с «Call to undefined function». Расширения из
         // системного ini безвредны: fake-Redis объявляет класс Redis ДО config.php
-        // и только если он ещё не определён (class_exists guard).
+        // и только если он ещё не определён (class_exists guard). Исключение —
+        // phpredis: см. INTEGRATION_CHILD_NEEDS_N выше.
         // error_reporting=0 глушит штатные warning'и CLI-SAPI (header() и пр.).
-        ['php', '-d', 'error_reporting=0', $INPROC_TMP . '/child.php'],
-        $descriptors, $pipes,
+        $child_cmd,
+        $descriptors,
+        $pipes,
         BATTLE_PROJECT_ROOT,
-        ['BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json', 'PATH' => getenv('PATH')]
+        [
+            'BATTLE_TEST_INPUT_FILE' => $INPROC_TMP . '/body.json',
+            // Публикации Centrifugo уходят в JSONL-файл, а не в живую шину:
+            // тест проверяет сам факт/содержимое публикаций (шаг 4).
+            'CENTRIFUGO_SINK_FILE' => $INPROC_TMP . '/pubs.jsonl',
+            'PATH' => getenv('PATH'),
+            'SystemRoot' => getenv('SystemRoot'),
+            'WINDIR' => getenv('WINDIR'),
+        ]
     );
     if (!is_resource($proc)) {
         return ['status' => 500, 'json' => null, 'raw' => 'не удалось запустить дочерний процесс'];
@@ -304,9 +359,8 @@ putenv('FAKEREDIS_SHARED=1');                     // общее in-memory хра
 {$vDumpLoad} // восстановление dump'а хранилища (serialize) перед запросом
 
 // Должно быть определено ДО require bootstrap.php: rules.php уважает
-// defined()-guard, а poll.php с LONG_POLL_TIMEOUT=0 отвечает сразу
-// (в живом сервере long-poll держал бы соединение 25 с).
-define('LONG_POLL_TIMEOUT', 0);
+// defined()-guard. (LONG_POLL_TIMEOUT/define удалены вместе с long polling —
+// транспорт теперь Centrifugo, публикация идёт в CENTRIFUGO_SINK_FILE.)
 
 \$_SERVER['REQUEST_METHOD']  = {$vMethod};
 \$_SERVER['REQUEST_URI']     = {$vUri};
@@ -348,8 +402,26 @@ require {$vTarget}; // эндпоинт завершается exit (jsonRespons
 PHP;
 }
 
-function make_card($uid, $nick, $overrides = []) {
-    $card = [
+// ─── ЧТЕНИЕ СОСТОЯНИЯ МИРА в двух режимах ──────────────────────────────────
+// in-process: fake-Redis родителя ($GLOBALS['_redis_store'], raw-строки значений);
+// OVER-HTTP: GET dump_state.php — read-only эндпоинт, отдаёт battle:* ключи в
+//   декодированном виде; ре-энкодим в JSON-строки, чтобы все вызывающие
+//   json_decode($st['battle:players']) работали без изменений.
+function test_store(): array {
+    global $INTEGRATION_HTTP;
+    if (!$INTEGRATION_HTTP) {
+        return $GLOBALS['_redis_store'] ?? [];
+    }
+    $r = http_req('/php/dump_state.php');
+    $keys = $r['json']['keys'] ?? [];
+    $out = [];
+    foreach ($keys as $k => $v) {
+        $out[$k] = is_string($v) ? $v : json_encode($v);
+    }
+    return $out;
+}
+
+function make_card($uid, $nick, $overrides = []) {    $card = [
         'uid' => (string)$uid,
         'nickname' => $nick,
         'stats' => [
@@ -361,8 +433,9 @@ function make_card($uid, $nick, $overrides = []) {
     ];
     foreach ($overrides as $k => $v) {
         if ($v === null) unset($card[$k]);
-        elseif (is_array($v) && isset($card[$k]) && is_array($card[$k])) $card[$k] = $v + $card[$k];
-        else $card[$k] = $v;
+        else $card[$k] = $v; // списки (abilities/passives) ЗАМЕЩАЮТСЯ целиком:
+                             // union ($v + $card[$k]) добирает дефолты и ломает
+                             // смысл негативных проверок («2 способности вместо 3»)
     }
     if (isset($overrides['stats'])) $card['stats'] = $overrides['stats'];
     return $card;
@@ -374,7 +447,7 @@ echo "== Интеграционный тест join-цикла (fake redis, ре
 $r = http_req('/php/init.php', null, ['reset' => '1']);
 check($r['status'] === 200, 'init?reset=1 → 200 (сборка новой сессии)');
 check(!empty($r['json']['success']), 'init?reset=1 → success:true');
-$st = $GLOBALS['_redis_store'] ?? [];
+$st = test_store();
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(is_array($players) && count($players) === 0, 'после сброса бойцов ровно 0 (нет персонажей без владельца)');
 
@@ -395,16 +468,41 @@ foreach ($nicks as $i => $nick) {
     check(($r['json']['player_id'] ?? '') === 'PLAYER' . ($i + 1),
         'join вернул player_id PLAYER' . ($i + 1));
     check(($r['json']['rejoin'] ?? null) === false, 'первый вход не rejoin');
+    // ws-блок Centrifugo: url+канал+JWT (три сегмата) — клиент подключается по нему
+    $ws = $r['json']['ws'] ?? [];
+    check(!empty($ws['url']) && ($ws['channel'] ?? '') === 'battle:PLAYER' . ($i + 1),
+        'join отдаёт ws: url + персональный канал battle:PLAYER' . ($i + 1));
+    check(substr_count((string)($ws['token'] ?? ''), '.') === 2,
+        'join отдаёт ws.token — JWT HS256 (3 сегмента)');
 }
-$st = $GLOBALS['_redis_store'] ?? [];
+$st = test_store();
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 4, 'в мире ровно 4 персонажа (4 игрока = 4 персонажа)');
 
-// ─── 4. poll.php: клиент видит тех же бойцов ────────────────────────────────
-$r = http_req('/php/poll.php', null, ['wait' => '0']);
-check($r['status'] === 200, 'poll → 200');
-$pp = $r['json']['players'] ?? [];
-check(count($pp) === 4, 'poll отдаёт 4 персонажа (N игроков = N персонажей на клиенте)');
+// ─── 4. Публикации Centrifugo: клиент видит тех же бойцов ───────────────────
+// join.php публикует снапшот в канал каждого бойца; in-process транспорт
+// собирает публикации в CENTRIFUGO_SINK_FILE (JSONL). В OVER-HTTP режиме
+// sink принадлежит серверному процессу — там проверяем только ws-контракт (шаг 3).
+$pp = [];
+if (!$INTEGRATION_HTTP) {
+    $sink = $INPROC_TMP . '/pubs.jsonl';
+    $lines = is_file($sink) ? array_filter(explode("\n", (string)file_get_contents($sink))) : [];
+    $last_by_channel = [];
+    foreach ($lines as $line) {
+        $rec = json_decode($line, true);
+        if (is_array($rec) && isset($rec['channel'], $rec['data'])) {
+            $last_by_channel[$rec['channel']] = $rec['data'];
+        }
+    }
+    check(($last_by_channel['battle:PLAYER1']['version'] ?? null) !== null,
+        'sink: есть публикация снапшота в battle:PLAYER1 (замена poll-ответа)');
+    $pp = $last_by_channel['battle:PLAYER1']['players'] ?? [];
+} else {
+    $pp = [];
+    echo "skip - OVER-HTTP: sink публикаций принадлежит серверному процессу, контракт снапшота проверяется in-process прогоном\n";
+}
+if (!$INTEGRATION_HTTP) {
+check(count($pp) === 4, 'снапшот отдаёт 4 персонажа (N игроков = N персонажей на клиенте)');
 $all_none = true; $uids_ok = true; $actions_ok = true; $abil_ok = true; $pass_ok = true;
 foreach ($pp as $pid => $p) {
     if (($p['ALLY'] ?? '') !== 'NONE') $all_none = false;
@@ -421,12 +519,18 @@ check($pass_ok, '2 выбранные пассивки у каждого бой�
 // канонизированный формат ABILITIES "NAME[range]"
 $fire = $pp['PLAYER1']['ABILITIES'][0] ?? '';
 check(preg_match('/^\w+.*\[\d+\]$/', $fire) === 1, "ABILITIES в каноническом формате движка ('$fire')");
+// снапшот-контракт для анимаций клиента: серверные часы и версия присутствие
+$snap1 = $last_by_channel['battle:PLAYER1'] ?? [];
+check(isset($snap1['server_now']) && $snap1['server_now'] > 0, 'snapshot: server_now для syncClock');
+check(isset($snap1['turn_time'], $snap1['time_to_next_turn'], $snap1['victory']), 'snapshot: поля хода/таймера/victory на верхнем уровне');
+check(($last_by_channel['battle:PLAYER4']['room_id'] ?? '') === 'E5', 'snapshot(PLAYER4): комната спавна E5 — каналы разносят состояние по игрокам');
+}
 
 // ─── 5. Идемпотентный повторный вход ────────────────────────────────────────
 $r = http_req('/php/join.php', json_encode(make_card(2, 'BETA-1')));
 check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
     'повторный join того же uid → rejoin:true');
-$st = $GLOBALS['_redis_store'] ?? [];
+$st = test_store();
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 4, 'после rejoin бойцов всё ещё 4 (второй персонаж не создан)');
 
@@ -454,12 +558,16 @@ check($r['status'] === 200 && ($r['json']['rejoin'] ?? false) === true,
 // Ключи правим только в хранилище фейка (внешний дамп battle:*), боевые
 // файлы не трогаются; version не инкрементируем — фиктивного 5-го бойца
 // join увидит через loadBattleState из внешнего дампа.
-$st = $GLOBALS['_redis_store'] ?? [];
+$st = test_store();
 $players = json_decode($st['battle:players'] ?? '[]', true);
+if (!is_array($players)) $players = [];
 check(count($players) === 4, 'неудачные попытки не добавили бойцов (всё ещё 4)');
 
+if (!$INTEGRATION_HTTP) {
 $overfull_backup = $st;                       // снимок мира для восстановления
-$ghost = $players[0];                         // копия реального бойца — валидная структура
+$ghost = reset($players);                     // копия реального бойца — валидная структура
+                                            // (assoc-массив: $players[0] недопустим —
+                                            // ключи это ID бойцов, не индексы)
 $ghost['ID'] = 'PLAYER9';
 $ghost['UID'] = '9';
 $ghost['NICKNAME'] = 'GHOST';
@@ -477,17 +585,15 @@ check(count($players_after) === 4 && !array_filter($players_after,
     fn($p) => ($p['NICKNAME'] ?? '') === 'ZULU'),
     'отказ по переполнению не создал бойца (ошибочный запрос не мутировал мир)');
 $GLOBALS['_redis_store'] = $overfull_backup;  // вернуть настоящий мир сценария
+} else {
+    echo "skip - OVER-HTTP: раздувание мира фиктивным 5-м бойцом требует записи в хранилище сервера (только in-process)\n";
+}
 
 // ─── 8. Серверная валидация битых карточек ──────────────────────────────────
-// Новая сессия: 0 бойцов. ★ Сброс делаем ПРЯМОЙ манипуляцией хранилищем
-// fake-Redis, а не POST init.php{reset:true}: у init.php контракт GET
-// (?reset=1), тело POST он игнорирует, и вместо сброса получался обычный
-// init — мир шага 7 оставался заполненным, и первый же битый запрос
-// (uid=1) давал бы ложный rejoin 200 вместо ожидаемого отказа 400.
-// Механика повторяет world_reset_write(): flushDB + боевые ключи пустого
-// каркаса + version=1. Фейк без battle:* ключей load читает как пустой мир
-// (json null → []), поэтому достаточно flushDB и версии.
-$GLOBALS['_redis_store'] = ['battle:version' => '1'];
+// Новая сессия: 0 бойцов. Сброс — штатным GET init.php?reset=1 (тот же контракт,
+// что шаг 1: flushDB + каркас пустого мира + version=1); прямой манипуляцией
+// хранилищем пользоваться нельзя в OVER-HTTP режиме (у сервера своё).
+http_req('/php/init.php', null, ['reset' => '1']);
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['abilities' => ['FIRE WAVE', 'ICE SHARD']])));
 check($r['status'] === 400, '2 способности вместо 3 → 400');
@@ -508,7 +614,7 @@ $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
                  'RESISTANCE' => 0, 'RANGE' => 6, 'ACTIONS' => 2]])));
 check($r['status'] === 200 && !empty($r['json']['success']),
     'SHIELD=0 и RESISTANCE=0 (минимум диапазона) → 200, отсутствие щита/сопротивления легально');
-$GLOBALS['_redis_store'] = ['battle:version' => '1']; // очистить после успешного join
+http_req('/php/init.php', null, ['reset' => '1']); // очистить после успешного join
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['stats' => ['HITPOINTS' => 7, 'SHIELD' => -1, 'ATTACK' => 8,
                  'RESISTANCE' => 0, 'RANGE' => 6, 'ACTIONS' => 2]])));
@@ -517,11 +623,11 @@ $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO',
     ['stats' => ['HITPOINTS' => 7, 'SHIELD' => 0, 'ATTACK' => 8,
                  'RESISTANCE' => 10, 'RANGE' => 6, 'ACTIONS' => 2]])));
 check($r['status'] === 400, 'RESISTANCE=10 вне диапазона 0..9 → 400');
-$GLOBALS['_redis_store'] = ['battle:version' => '1']; // вернуть пустой мир перед финальным проверочным join
+http_req('/php/init.php', null, ['reset' => '1']); // вернуть пустой мир перед финальным проверочным join
 $r = http_req('/php/join.php', json_encode(make_card(1, 'SOLO')));
 check($r['status'] === 200 && !empty($r['json']['success']),
     'валидная карточка после серии отказов проходит (битые запросы не тронули мир)');
-$st = $GLOBALS['_redis_store'] ?? [];
+$st = test_store();
 $players = json_decode($st['battle:players'] ?? '[]', true);
 check(count($players) === 1, 'один игрок = ровно один персонаж (одиночная сессия легальна)');
 
@@ -534,8 +640,6 @@ check(count($players) === 1, 'один игрок = ровно один перс
 require_once BATTLE_PROJECT_ROOT . '/tests/fakeredis_stub.php';
 putenv('FAKEREDIS_SHARED=1');
 $GLOBALS['_redis_store'] = $GLOBALS['_redis_store'] ?? [];
-$prevLongPoll = defined('LONG_POLL_TIMEOUT') ? null : true;
-if ($prevLongPoll !== null) define('LONG_POLL_TIMEOUT', 0); // страховка на случай прямого require эндпоинтов
 require_once BATTLE_PROJECT_ROOT . '/php/engine/bootstrap.php';
 $state = world_load();
 $res = engine_check_victory($state);

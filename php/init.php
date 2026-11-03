@@ -117,6 +117,24 @@ try {
         ? 'Флаг battle:seeded не найден — мир мог быть собран вне engine/world_reset.php.'
         : null;
 
+    // ★ Предупреждение (не фатал): демон тика молчит. После перехода на
+    // Centrifugo мир двигает НЕ клиентский запрос, а tools/ticker.php — если
+    // процесс не запущен/упал, бой «замирает» без единого объяснения, поэтому
+    // age метки battle:ticker_beat отдаём уже здесь (клиент покажет в статусе).
+    $ticker_warning = null;
+    try {
+        $beat_age = ticker_beat_age();
+        if ($beat_age === null) {
+            $ticker_warning = 'Демон тика не запускался (battle:ticker_beat нет) — '
+                . 'запустите: php tools/ticker.php';
+        } elseif ($beat_age > 5) {
+            $ticker_warning = 'Демон тика молчит ' . round($beat_age) . ' с — мир может быть заморожен '
+                . '(перезапустите: php tools/ticker.php)';
+        }
+    } catch (Throwable $e) {
+        $ticker_warning = null; // диагностика не должна блокировать вход
+    }
+
     // ── 2. Проверка состава бойцов тем же кодом, что собирает мир ──────────
     // (валидация обязательных полей не должна жить во втором месте: здесь она
     // идёт через world_builder_player_errors() — те же правила, что у сброса.)
@@ -147,14 +165,14 @@ try {
     unset($npc);
 
     // turn_time = дедлайн первого хода, если сборка его не задала (страховка от
-    // «хода каждый тик», см. poll.php)
+    // «хода каждый тик», см. engine/snapshot.php)
     if ((int)($state['turn_time'] ?? 0) <= 0) {
         $state['turn_time'] = time();
         $changed = true;
     }
 
     // Сохраняем только реально внесённые правки: безусловный save сдвинул бы
-    // версию и ложно разбудил всех long-poll клиентов.
+    // версию и ложно разбудил подписчиков снапшотов лишней публикацией.
     if ($changed) {
         world_save($state);
     }
@@ -168,7 +186,7 @@ try {
     echo json_encode(array_filter([
         'success' => true,
         'message' => 'Бой загружен из Redis (мир собран engine/world_reset.php)',
-        'warning' => $seed_warning,
+        'warning' => $seed_warning ?: $ticker_warning,
         'room' => $room_id,
         'rules' => rules_client_payload(),
         'abilities' => getAbilityDefinitions(),

@@ -52,12 +52,13 @@ echo "__DIR__: " . __DIR__ . "\n";
 echo "Current working dir: " . getcwd() . "\n\n";
 
 $files = [
-    // HTTP-эндпоинты
+    // HTTP-эндпоинты (poll.php удалён — доставка снапшотов через Centrifugo,
+    // тик мира — демон tools/ticker.php)
     'config.php' => __DIR__ . '/config.php',
     'battle.php' => __DIR__ . '/battle.php',
     'init.php' => __DIR__ . '/init.php',
-    'poll.php' => __DIR__ . '/poll.php',
     'action.php' => __DIR__ . '/action.php',
+    'join.php' => __DIR__ . '/join.php',
     // Ядро движка
     'engine/rules.php' => __DIR__ . '/engine/rules.php',
     'engine/geometry.php' => __DIR__ . '/engine/geometry.php',
@@ -196,6 +197,20 @@ try {
         echo "version после load = " . world_version() . " (load не должен её двигать)\n";
         turn_tick($loaded);
         echo "✅ turn_tick() отработал без ошибок (без записи в мир)\n";
+        // Демон тика + шина доставки (замена long polling): см. tools/ticker.php
+        $beat = ticker_beat_age();
+        echo "battle:ticker_beat = " . ($beat === null
+            ? "⚠️ метки нет — демон не запускался (php tools/ticker.php)"
+            : ($beat <= 5 ? "✅ живой, возраст " . round($beat * 1000) . " мс"
+                          : "❌ молчит " . round($beat) . " с — мир заморожен")) . "\n";
+        $ws_probe = @file_get_contents(CENTRIFUGO_API_URL, false, stream_context_create(['http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\nx-api-key: " . CENTRIFUGO_API_KEY . "\r\n",
+            'content' => json_encode(['method' => 'info', 'params' => new stdClass()]),
+            'timeout' => 1, 'ignore_errors' => true,
+        ]]));
+        echo "Centrifugo API (" . CENTRIFUGO_API_URL . ") = "
+            . (strpos((string)$ws_probe, '"result"') !== false ? "✅ доступна" : "❌ недоступна: " . substr((string)$ws_probe, 0, 120)) . "\n";
     }
 } catch (Throwable $e) {
     echo "❌ Тест движка на Redis-мире: " . $e->getMessage() . "\n";

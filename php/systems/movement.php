@@ -40,7 +40,7 @@ function engine_active_room($state, $room_id = null) {
  * ★ Эффективная дальность хода игрока: базовая MAX_MOVE_DISTANCE со всеми
  * модификаторами шины (SWIFT +value, SLOWED −value; floor 1 — как в
  * movement_process_move). Единая точка расчёта: её используют и серверная
- * валидация хода, и poll-ответ (поле players[].MOVE_RANGE), чтобы клиентская
+ * валидация хода, и снапшот (поле players[].MOVE_RANGE), чтобы клиентская
  * подсветка движения НЕ дублила формулу модификаторов (баг «подсветка
  * игнорирует SWIFT/SLOWED»).
  */
@@ -74,7 +74,7 @@ function movement_process_move(&$state, $player_id, $target_x, $target_y) {
     }
 
     // Дальность хода — базовая константа + редукция слушателями шины
-    // (единая формула с poll-ответом MOVE_RANGE — см. movement_effective_range)
+    // (единая формула с снапшотом MOVE_RANGE — см. movement_effective_range)
     $max_move = movement_effective_range($state, $player_id);
 
     $distance = manhattan($cur_pos['x'], $cur_pos['y'], $target_x, $target_y);
@@ -225,7 +225,7 @@ function makeTrapPreviewState($state) {
  */
 function movement_update(&$state) {
     // ── Виртуальные часы движения (catch-up tick) ──────────────────────────
-    // Движение анимируется по серверным часам, но тик poll-цикла дискретен.
+    // Движение анимируется по серверным часам, но тик тик-цикла дискретен.
     // Если реальный now обогнал MOVE_END_TIME, спрайт «перескочил» бы путь —
     // ловушки и зоны угрозы на промежуточных клетках не сработали бы (баги
     // «STUNNED от мины не приходит», «турель не стреляет в ответ»). Поэтому
@@ -364,8 +364,8 @@ function movement_on_query_block(&$state, &$payload) {
  * Вызывается из action.php ПОСЛЕ world_load() непосредственно перед сохранением.
  *
  * Причина (баг «движение работает только пока игрок сам дёргает сервер»):
- * MOVE_START/MOVE_END_TIME — это microtime(true), а poll-цикл тикает раз в
- * ~100 мс. Если клиент следующий poll сделает позже MOVE_END_TIME, update
+ * MOVE_START/MOVE_END_TIME — это microtime(true), а тик-цикл тикает раз в
+ * ~100 мс. Если клиент следующий тик сделает позже MOVE_END_TIME, update
  * увидит лишь финальную точку и «пролетит» все промежуточные клетки пути —
  * именно на них должны срабатывать ловушки и зоны угрозы NPC (в т.ч. STUNNED
  * от мины и ответный огонь турели). Поэтому фиксируем виртуальные часы мира

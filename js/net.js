@@ -1,5 +1,5 @@
-// net.js — long polling, подключение игрока и отправка действий
-// (initGame, joinGame, poll, sendAction).
+// net.js — подключение игрока, отправка действий и синхронизация часов.
+// Транспорт снапшотов — Centrifugo (см. js/realtime.js), long polling удалён.
 // Часть модульного клиента: см. AGENTS.md §5.
 
 // !!! НЕ ОБЪЯВЛЯЙТЕ здесь var/let/const CONFIG !!!
@@ -50,6 +50,10 @@ async function joinGame(card) {
         if (data.rejoin) {
             statusEl.textContent = 'Соединение восстановлено: ' + data.message;
         }
+        // Centrifugo-параметры сервера (url+канал+JWT-токен на бойца) и
+        // карточка для будущего обновления токена (rejoin идемпотентен).
+        state.ws = data.ws || null;
+        state.lastCard = card;
         // Шаг 3: явный init.php перед боем (см. шапку main.js).
         return await initGame(data.player_id);
     } catch (err) {
@@ -60,10 +64,11 @@ async function joinGame(card) {
 }
 
 /**
- * Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт polling.
+ * Инициализация игры: вызов init.php (шаг 3 после успешного join) и старт
+ * realtime-подписки (Centrifugo, см. js/realtime.js).
  * @param {string|null} playerId id бойца из ответа join.php; null — бойцов в
- *        мире пока нет (poll найдёт состояние мира как есть).
- * @return {Promise<boolean>} true — бой загружен, polling запущен
+ *        мире пока нет (realtime найдёт состояние мира как есть).
+ * @return {Promise<boolean>} true — бой загружен, подписка запущена
  */
 async function initGame(playerId) {
     if (playerId) state.playerId = playerId;
@@ -100,6 +105,10 @@ async function initGame(playerId) {
         
         if (initData.success) {
             statusEl.textContent = 'Бой начат! Загрузка...';
+            if (initData.warning) {
+                console.log('Init warning:', initData.warning);
+                showNotification(initData.warning, 'warning');
+            }
             
             // Переключаем на игровой экран
             document.getElementById('login-screen').style.display = 'none';
@@ -108,8 +117,8 @@ async function initGame(playerId) {
             // Строим сетку
             buildGrid();
             
-            // Начинаем long polling
-            startPolling();
+            // Подписка на снапшоты мира через Centrifugo
+            startRealtime();
             return true;
         } else {
             statusEl.textContent = 'Ошибка: ' + initData.message;
@@ -124,7 +133,7 @@ async function initGame(playerId) {
     }
 }
 
-// === LONG POLLING ===
+// === СИНХРОНИЗАЦИЯ ЧАСОВ (используется realtime-транспортом) ===
 
 /**
  * ★ Синхронизация часов клиента с серверными (лечит дёрганье/телепорт движения).
@@ -167,63 +176,6 @@ function syncClock(serverNowSec, rttMs) {
         state.clockOffsetMs += delta * 0.5;  // резкий скачок — принимаем мягко
     }
     state.clockLastRttMs = rttMs;
-}
-
-/**
- * Запуск цикла long polling
- */
-function startPolling() {
-    if (state.polling) return;
-    state.polling = true;
-    poll();
-}
-
-/**
- * Один запрос long polling
- */
-async function poll() {
-    if (!state.polling) return;
-    const pollStart = performance.now();
-    
-    try {
-        const url = CONFIG.PHP_URL + 'poll.php?v=' + state.version + '&player=' + state.playerId;
-        const resp = await fetch(url);
-        
-        if (!resp.ok) {
-            console.log('Poll HTTP error:', resp.status);
-            // Ждем перед повторной попыткой
-            setTimeout(poll, 2000);
-            return;
-        }
-        
-        const responseText = await resp.text();
-        
-        let data;
-        try {
-            data = JSON.parse(responseText);
-        } catch (e) {
-            console.log('Poll JSON parse error. Raw response:', responseText.substring(0, 200));
-            // Ждем перед повторной попыткой
-            setTimeout(poll, 2000);
-            return;
-        }
-        
-        if (data && data.version) {
-            // ★ Часы движения: сверяемся до render(), чтобы анимации этого
-            // snapshot уже интерполировались по серверному времени.
-            syncClock(data.server_now, performance.now() - pollStart);
-            state.version = data.version;
-            state.data = data;
-            render(data);
-        }
-    } catch (err) {
-        console.log('Poll error:', err);
-    }
-    
-    // Следующий запрос
-    if (state.polling) {
-        setTimeout(poll, 100);
-    }
 }
 
 // === ОТПРАВКА ДЕЙСТВИЙ ===
